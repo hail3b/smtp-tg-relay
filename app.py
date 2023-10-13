@@ -50,7 +50,7 @@ class TelegramSender:
     async def send_photo_to_telegram(self, photo_stream, message_text, reply_to_message_id):
         try:
             logging.info(f'send_photo_to_telegram {message_text=}')
-            await self.bot.send_photo(chat_id=self.chat_id, photo=photo_stream, caption=message_text, reply_to_message_id=reply_to_message_id)
+            self.bot.send_photo(chat_id=self.chat_id, photo=photo_stream, caption=message_text, reply_to_message_id=reply_to_message_id)
         except Exception as e:
             logging.error(f'Failed to send photo to Telegram. Error: {str(e)}')
 
