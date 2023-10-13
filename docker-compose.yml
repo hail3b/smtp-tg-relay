@@ -1,0 +1,18 @@
+version: '3'
+
+services:
+  smtp-tg-relay:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "2548:25"
+    environment:
+      BOT_TOKEN: 'YOUR_BOT_TOKEN_HERE'
+      CHAT_ID: 'YOUR_CHAT_ID_HERE'
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: always

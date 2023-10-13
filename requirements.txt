@@ -1,0 +1,2 @@
+aiosmtpd~=1.4.4.post2
+python-telegram-bot==13.15
