@@ -47,7 +47,7 @@ class TelegramSender:
         self.chat_id = chat_id
         self.bot = Bot(token=self.bot_token)
 
-    async def send_photo_to_telegram(self, photo_stream, message_text, reply_to_message_id):
+    def send_photo_to_telegram(self, photo_stream, message_text, reply_to_message_id):
         try:
             logging.info(f'send_photo_to_telegram {message_text=}')
             self.bot.send_photo(chat_id=self.chat_id, photo=photo_stream, caption=message_text, reply_to_message_id=reply_to_message_id)
@@ -100,14 +100,14 @@ class CustomSMTPHandler:
             now = datetime.datetime.now()
             message_text = self.format_message(mail_from, filename, now)
             thread_id = self.get_thread_id(msg)
-            await self.telegram_sender.send_photo_to_telegram(photo_stream, message_text, reply_to_message_id=thread_id)
+            self.telegram_sender.send_photo_to_telegram(photo_stream, message_text, reply_to_message_id=thread_id)
         except Exception as e:
             logging.error(f'Error while handling attachment: {str(e)}')
 
     @staticmethod
     def format_message(mail_from, filename, now):
-        #return f'Камера: {mail_from}\nНазвание файла: {filename}\nДата снимка: {now.strftime("%Y-%m-%d %H:%M:%S")}'
         return f'Дата снимка: {now.strftime("%Y-%m-%d %H:%M:%S")}'
+        #return f'Камера: {mail_from}\nНазвание файла: {filename}\nДата снимка: {now.strftime("%Y-%m-%d %H:%M:%S")}'
 
 
 def main():
