@@ -106,7 +106,8 @@ class CustomSMTPHandler:
 
     @staticmethod
     def format_message(mail_from, filename, now):
-        return f'Камера: {mail_from}\nНазвание файла: {filename}\nДата снимка: {now.strftime("%Y-%m-%d %H:%M:%S")}'
+        #return f'Камера: {mail_from}\nНазвание файла: {filename}\nДата снимка: {now.strftime("%Y-%m-%d %H:%M:%S")}'
+        return f'Дата снимка: {now.strftime("%Y-%m-%d %H:%M:%S")}'
 
 
 def main():
