@@ -10,6 +10,7 @@ services:
     environment:
       BOT_TOKEN: ${BOT_TOKEN}
       CHAT_ID: ${CHAT_ID}
+      TZ: Europe/Moscow
     logging:
       driver: "json-file"
       options:
