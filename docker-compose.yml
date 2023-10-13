@@ -7,9 +7,9 @@ services:
       dockerfile: Dockerfile
     ports:
       - "2548:25"
-    environment:
-      BOT_TOKEN: 'YOUR_BOT_TOKEN_HERE'
-      CHAT_ID: 'YOUR_CHAT_ID_HERE'
+#    environment:
+#      BOT_TOKEN: 'YOUR_BOT_TOKEN_HERE'
+#      CHAT_ID: 'YOUR_CHAT_ID_HERE'
     logging:
       driver: "json-file"
       options:
