@@ -25,12 +25,13 @@ import os
 
 from aiosmtpd.controller import Controller
 from telegram import Bot
+from PIL import Image, ImageDraw, ImageFont
 
 BOT_TOKEN = os.environ['BOT_TOKEN']
 CHAT_ID = os.environ['CHAT_ID']
 
-SMTP_SERVER_ADDR = ''
-SMTP_SERVER_PORT = 25
+SMTP_SERVER_ADDR = os.environ.get('SMTP_SERVER_ADDR', '')
+SMTP_SERVER_PORT = os.environ.get('SMTP_SERVER_PORT', 25)
 
 cameras = {
     'CAM001': 2,
@@ -47,10 +48,39 @@ class TelegramSender:
         self.chat_id = chat_id
         self.bot = Bot(token=self.bot_token)
 
+    def apply_watermark(self, io_img, text):
+
+        # Открываем изображение
+        img = Image.open(io_img)
+
+        # Создаем объект ImageDraw
+        draw = ImageDraw.Draw(img)
+        width, height = img.size
+
+        # Определяем размеры прямоугольника
+        rectangle_height = 15
+        rectangle_width = width
+
+        # Определяем координаты верхнего левого и нижнего правого углов прямоугольника
+        rectangle_top_left = (0, height - rectangle_height)
+        rectangle_bottom_right = (width, height)
+        draw.rectangle([rectangle_top_left, rectangle_bottom_right], fill=(70, 70, 70))
+
+        text = text # f"Камера: CAM001; Дата снимка: 14.10.2023 17:43:02"
+        font = ImageFont.truetype("arial.ttf", 14)
+        text_color = (255, 255, 255)
+        draw.text((5, img.height - 15), text, fill=text_color, font=font)
+        draw.text((6, img.height - 15), text, fill=text_color, font=font)
+        output_bytes_io = io.BytesIO()
+        img.save(output_bytes_io, format='PNG')
+        output_bytes_io.seek(0)
+        return output_bytes_io
+
     def send_photo_to_telegram(self, photo_stream, message_text, reply_to_message_id):
         try:
             logging.info(f'send_photo_to_telegram {message_text=}')
-            self.bot.send_photo(chat_id=self.chat_id, photo=photo_stream, caption=message_text, reply_to_message_id=reply_to_message_id)
+            photo_stream = self.apply_watermark(photo_stream, message_text)
+            self.bot.send_photo(chat_id=self.chat_id, photo=photo_stream, reply_to_message_id=reply_to_message_id)
         except Exception as e:
             logging.error(f'Failed to send photo to Telegram. Error: {str(e)}')
 
@@ -91,7 +121,7 @@ class CustomSMTPHandler:
         for key, value in cameras.items():
             if key in msg["From"]:
                 return value, key
-        return None, None
+        return None, msg["From"]
 
     async def handle_attachment(self, msg, part, filename, mail_from):
         try:
@@ -107,7 +137,7 @@ class CustomSMTPHandler:
 
     @staticmethod
     def format_message(mail_from, filename, now, thread_name):
-        return f'Камера: {thread_name}\nДата снимка: {now.strftime("%Y-%m-%d %H:%M:%S")}'
+        return f'Дата снимка: {now.strftime("%Y-%m-%d %H:%M:%S")}; Камера: {thread_name}'
         #return f'Камера: {mail_from}\nНазвание файла: {filename}\nДата снимка: {now.strftime("%Y-%m-%d %H:%M:%S")}'
 
 
