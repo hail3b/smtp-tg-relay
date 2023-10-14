@@ -104,6 +104,7 @@ class CustomSMTPHandler:
         except Exception as e:
             logging.error(f'Error while handling attachment: {str(e)}')
 
+
     @staticmethod
     def format_message(mail_from, filename, now, thread_name):
         return f'Камера: {thread_name}\nДата снимка: {now.strftime("%Y-%m-%d %H:%M:%S")}'
