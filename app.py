@@ -67,7 +67,7 @@ class TelegramSender:
         draw.rectangle([rectangle_top_left, rectangle_bottom_right], fill=(70, 70, 70))
 
         text = text # f"Камера: CAM001; Дата снимка: 14.10.2023 17:43:02"
-        font = ImageFont.truetype("arial.ttf", 14)
+        font = ImageFont.truetype("ArialBold_.ttf", 14)
         text_color = (255, 255, 255)
         draw.text((5, img.height - 15), text, fill=text_color, font=font)
         draw.text((6, img.height - 15), text, fill=text_color, font=font)
