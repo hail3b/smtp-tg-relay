@@ -90,23 +90,23 @@ class CustomSMTPHandler:
         }
         for key, value in cameras.items():
             if key in msg["From"]:
-                return value
-        return None
+                return value, key
+        return None, None
 
     async def handle_attachment(self, msg, part, filename, mail_from):
         try:
             file_data = part.get_payload(decode=True)
             photo_stream = io.BytesIO(file_data)
             now = datetime.datetime.now()
-            message_text = self.format_message(mail_from, filename, now)
-            thread_id = self.get_thread_id(msg)
+            thread_id, thread_name = self.get_thread_id(msg)
+            message_text = self.format_message(mail_from, filename, now, thread_name)
             self.telegram_sender.send_photo_to_telegram(photo_stream, message_text, reply_to_message_id=thread_id)
         except Exception as e:
             logging.error(f'Error while handling attachment: {str(e)}')
 
     @staticmethod
-    def format_message(mail_from, filename, now):
-        return f'Дата снимка: {now.strftime("%Y-%m-%d %H:%M:%S")}'
+    def format_message(mail_from, filename, now, thread_name):
+        return f'Камера: {thread_name}\nДата снимка: {now.strftime("%Y-%m-%d %H:%M:%S")}'
         #return f'Камера: {mail_from}\nНазвание файла: {filename}\nДата снимка: {now.strftime("%Y-%m-%d %H:%M:%S")}'
 
 
