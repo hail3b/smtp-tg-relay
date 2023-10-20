@@ -34,8 +34,8 @@ SMTP_SERVER_ADDR = os.environ.get('SMTP_SERVER_ADDR', '')
 SMTP_SERVER_PORT = os.environ.get('SMTP_SERVER_PORT', 25)
 
 cameras = {
-    'CAM001': 2,
-    'CAM002': 3,
+    'CAM001': 338,
+    'CAM002': 339,
 }
 serialized_cameras = str(cameras)
 
