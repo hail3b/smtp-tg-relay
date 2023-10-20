@@ -33,7 +33,7 @@ CHAT_ID = os.environ['CHAT_ID']
 SMTP_SERVER_ADDR = os.environ.get('SMTP_SERVER_ADDR', '')
 SMTP_SERVER_PORT = os.environ.get('SMTP_SERVER_PORT', 25)
 
-cameras = {
+MAPPING_CAMERAS_THEMES = {
     'CAM001': 338,
     'CAM002': 339,
 }
@@ -114,11 +114,7 @@ class CustomSMTPHandler:
         return part.get_content_maintype() != 'multipart' and part.get('Content-Disposition') is not None
 
     def get_thread_id(self, msg):
-        cameras = {
-            'CAM001': 2,
-            'CAM002': 3,
-        }
-        for key, value in cameras.items():
+        for key, value in MAPPING_CAMERAS_THEMES.items():
             if key in msg["From"]:
                 return value, key
         return None, msg["From"]
