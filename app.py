@@ -124,9 +124,11 @@ class CustomSMTPHandler:
             file_data = part.get_payload(decode=True)
             photo_stream = io.BytesIO(file_data)
             now = datetime.datetime.now()
-            thread_id, thread_name = self.get_thread_id(msg)
+            reply_to_message_id, thread_name = self.get_thread_id(msg)
             message_text = self.format_message(mail_from, filename, now, thread_name)
-            self.telegram_sender.send_photo_to_telegram(photo_stream, message_text, reply_to_message_id=thread_id)
+            logging.info(f'Send message to telegram {reply_to_message_id=}: {message_text=}')
+            
+            self.telegram_sender.send_photo_to_telegram(photo_stream, message_text, reply_to_message_id=reply_to_message_id)
         except Exception as e:
             logging.error(f'Error while handling attachment: {str(e)}')
 
