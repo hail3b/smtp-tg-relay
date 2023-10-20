@@ -37,7 +37,6 @@ MAPPING_CAMERAS_THEMES = {
     'CAM001': 338,
     'CAM002': 339,
 }
-serialized_cameras = str(cameras)
 
 
 logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.INFO)
