@@ -77,11 +77,18 @@ class LocalRecipient:
             
         if len(parts) == 1:
             parts = local_name.split('_')
-            
+                
+        # Если только одна часть, предполагается, что это chat_id
         if len(parts) == 1:
-            return cls(chat_id=parts[0])
+            chat_id = parts[0].lstrip("id")  # Убираем префикс "id" если он есть
+            return cls(chat_id=chat_id)
+        
+        # Если две части, предполагается, что это chat_id и message_thread_id
         elif len(parts) == 2:
-            return cls(chat_id=parts[0], message_thread_id=parts[1])
+            chat_id = parts[0].lstrip("id")  # Убираем префикс "id" если он есть
+            message_thread_id = parts[1]
+            return cls(chat_id=chat_id, message_thread_id=message_thread_id)
+
         return None
 
 class CustomSMTPHandler:
