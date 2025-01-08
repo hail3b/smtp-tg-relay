@@ -164,7 +164,21 @@ class CustomSMTPHandler:
                 parsed_email["text_body"] = part.get_payload(decode=True).decode().rstrip()
         elif content_type == "text/html" and 'attachment' not in content_disposition:
             if parsed_email["html_body"] is None:
-                parsed_email["html_body"] = part.get_payload(decode=True).decode()
+                html_content = part.get_payload(decode=True).decode()
+                parsed_email["html_body"] = html_content
+                    
+                # Добавляем HTML как вложение
+                attachment_info = {
+                    "filename": "message.html",
+                    "content_type": "text/html",
+                    "content": html_content.encode("utf-8"),
+                    "content_disposition": "attachment",
+                    "content_id": "",
+                    "size": len(html_content),
+                    "encoding": "utf-8",
+                    "charset": "utf-8"
+                }
+
         elif 'attachment' in content_disposition or 'inline' in content_disposition:
             self._process_attachment(part, parsed_email)
 
