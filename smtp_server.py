@@ -166,22 +166,55 @@ class CustomSMTPHandler:
                 parsed_email["text_body"] = part.get_payload(decode=True).decode().rstrip()
         elif content_type == "text/html" and 'attachment' not in content_disposition:
             if parsed_email["html_body"] is None:
-                html_content = part.get_payload(decode=True).decode()
+                # Получаем сырые байты
+                raw_payload = part.get_payload(decode=True)
+                
+                # Пытаемся узнать кодировку из заголовка
+                declared_charset = part.get_content_charset()
+                
+                # Если в заголовке нет charset, пробуем автоматически определить (через chardet)
+                if not declared_charset:
+                    detected = chardet.detect(raw_payload)
+                    declared_charset = detected['encoding'] or 'utf-8'
+                
+                # Декодируем в ту кодировку, которая нашлась
+                html_content = raw_payload.decode(declared_charset, errors='replace')
+                
+                # Сохраняем «чистый» HTML
                 parsed_email["html_body"] = html_content
-                    
+    
+                # При необходимости перекодируем в UTF-8 (если хотим сохранить/передать именно в UTF-8)
+                html_as_utf8 = html_content.encode('utf-8')
+                
+                # Предполагаем, что html_as_utf8 — это байты в UTF-8
+                html_content = html_as_utf8.decode('utf-8', errors='replace')
+                wrapped_html = f"""<!DOCTYPE html>
+                <html>
+                <head>
+                    <meta charset="utf-8">
+                    <title>Сообщение</title>
+                </head>
+                <body>
+                {html_content}
+                </body>
+                </html>"""
+                wrapped_html_as_utf8 = wrapped_html.encode('utf-8')
+
+                html_as_utf8 = wrapped_html_as_utf8
+
                 # Добавляем HTML как вложение
                 attachment_info = {
                     "filename": "message.html",
                     "content_type": "text/html",
-                    "content": html_content.encode("utf-8"),
+                    "content": html_as_utf8,
                     "content_disposition": "attachment",
                     "content_id": "",
-                    "size": len(html_content),
+                    "size": len(html_as_utf8),
                     "encoding": "utf-8",
                     "charset": "utf-8"
                 }
                 parsed_email["attachments"].append(attachment_info)
-
+                
         elif 'attachment' in content_disposition or 'inline' in content_disposition:
             self._process_attachment(part, parsed_email)
 
