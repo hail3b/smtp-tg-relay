@@ -101,21 +101,23 @@ class CustomSMTPHandler:
         self.bot = Bot(token=TELEGRAM_BOT_TOKEN)
 
     async def validate_envelope(self, envelope: Envelope) -> Tuple[bool, str]:
-        """Validate envelope data"""
         if len(envelope.content) > self.config.max_message_size:
             return False, '552 Message size exceeds fixed maximum message size'
-            
+    
         if len(envelope.content) < 50:
             return False, '451 Invalid message content'
-            
+    
         try:
             email_message = BytesParser(policy=default).parsebytes(envelope.content)
-            if not email_message.get('From') or not email_message.get('To'):
-                return False, '451 Missing required headers'
+            if not email_message.get('From'):
+                return False, '451 Missing required header: From'
+            # Если заголовок 'To' отсутствует, но в envelope есть получатели, считаем, что он задан
+            if not email_message.get('To') and not envelope.rcpt_tos:
+                return False, '451 Missing required header: To'
         except Exception as e:
             self.logger.error(f'Error parsing message: {e}')
             return False, '451 Invalid message format'
-            
+    
         return True, ''
 
     def extract_message_content(self, email_message) -> Dict:
@@ -178,6 +180,7 @@ class CustomSMTPHandler:
                     "encoding": "utf-8",
                     "charset": "utf-8"
                 }
+                parsed_email["attachments"].append(attachment_info)
 
         elif 'attachment' in content_disposition or 'inline' in content_disposition:
             self._process_attachment(part, parsed_email)
