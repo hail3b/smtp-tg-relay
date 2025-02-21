@@ -2,3 +2,4 @@ aiosmtpd>=1.4.2
 aiohttp>=3.8.1
 python-telegram-bot>=20.0 
 python-dotenv
+chardet
