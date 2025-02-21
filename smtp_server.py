@@ -293,6 +293,12 @@ class CustomSMTPHandler:
             elif message_dict['html_body']:
                 clean_text = re.sub(r'<[^>]+>', '', message_dict['html_body'])
                 text += f"{html.escape(clean_text[:4000])}..."
+            
+            # Если письмо содержит вложения, и мы отправляем их как медиа-сообщение,
+            # обрезаем подпись до 1024 символов, чтобы избежать ошибки Telegram
+            MAX_CAPTION_LENGTH = 1024
+            if len(text) > MAX_CAPTION_LENGTH:
+                text = text[:MAX_CAPTION_LENGTH - 3] + "..."
 
             # Если нет вложений, отправляем только текст
             if not message_dict['attachments']:
