@@ -412,15 +412,10 @@ class CustomSMTPHandler:
             
             body = message_dict.get('text_body') or message_dict.get('html_body')
             if body:
-                clean_text = re.sub(r'<[^>]+>', '', body)
-                text += f"{html.escape(clean_text)}"
-                
-            # Если письмо содержит вложения, и мы отправляем их как медиа-сообщение,
-            # обрезаем подпись до 1024 символов, чтобы избежать ошибки Telegram
-            # Но только если текст не был уже обработан в _process_message_part
-            if not any(att['filename'] == 'message.html' for att in message_dict['attachments']):
-                text = self._truncate_text(text)
-
+                text += f"{html.escape(body)}"
+            
+            text = self._truncate_text(text)            
+            
             # Если нет вложений, отправляем только текст
             if not message_dict['attachments']:
                 await self.bot.send_message(
