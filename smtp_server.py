@@ -415,7 +415,20 @@ class CustomSMTPHandler:
             # Но только если текст не был уже обработан в _process_message_part
             MAX_CAPTION_LENGTH = 1024
             if len(text) > MAX_CAPTION_LENGTH and not any(att['filename'] == 'message.html' for att in message_dict['attachments']):
-                text = text[:MAX_CAPTION_LENGTH - 3] + "..."
+                # Отправляем первую часть текста отдельным сообщением
+                await self.bot.send_message(
+                    chat_id=chat_id,
+                    text=text[:MAX_CAPTION_LENGTH - 3] + "...",
+                    parse_mode='HTML',
+                    message_thread_id=message_thread_id if message_thread_id else None
+                )
+                # Если есть вложения, отправляем их без текста
+                if message_dict['attachments']:
+                    media_files = await self._prepare_media_files(message_dict['attachments'])
+                    for media_type, files in media_files.items():
+                        if files:
+                            await self._send_media_group(chat_id, message_thread_id, media_type, files)
+                return True
 
             # Если нет вложений, отправляем только текст
             if not message_dict['attachments']:
@@ -437,7 +450,7 @@ class CustomSMTPHandler:
                 
                 # Если файл один, отправляем его с текстом
                 if len(files) == 1:
-                    return await self._send_single_file(
+                    return await self._send_media(
                         chat_id, 
                         message_thread_id, 
                         media_type, 
@@ -478,6 +491,18 @@ class CustomSMTPHandler:
         """Общий метод для отправки медиафайлов"""
         try:
             file['file'].seek(0)
+            
+            # Проверяем длину подписи для Telegram (максимум 1024 символа)
+            MAX_CAPTION_LENGTH = 1024
+            if text and len(text) > MAX_CAPTION_LENGTH:
+                # Если текст слишком длинный, отправляем его отдельным сообщением
+                await self.bot.send_message(
+                    chat_id=chat_id,
+                    text=text,
+                    parse_mode='HTML',
+                    message_thread_id=message_thread_id if message_thread_id else None
+                )
+                text = None  # Сбрасываем текст для медиафайла
             
             if media_type == 'photo':
                 await self.bot.send_photo(
