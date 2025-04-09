@@ -26,6 +26,7 @@ import html
 import mimetypes
 from io import BytesIO
 from pathlib import Path
+import chardet
 
 @dataclass
 class ServerConfig:
@@ -120,6 +121,63 @@ class CustomSMTPHandler:
     
         return True, ''
 
+    def _process_html_content(self, raw_payload, part, parsed_email: Dict) -> None:
+        """Обрабатывает HTML-содержимое сообщения"""
+        # Пытаемся узнать кодировку из заголовка
+        declared_charset = part.get_content_charset()
+        
+        # Если в заголовке нет charset, пробуем автоматически определить (через chardet)
+        if not declared_charset:
+            detected = chardet.detect(raw_payload)
+            declared_charset = detected['encoding'] or 'utf-8'
+        
+        # Декодируем в ту кодировку, которая нашлась
+        html_content = raw_payload.decode(declared_charset, errors='replace')
+        
+        # Сохраняем «чистый» HTML
+        parsed_email["html_body"] = html_content
+
+        # При необходимости перекодируем в UTF-8 (если хотим сохранить/передать именно в UTF-8)
+        html_as_utf8 = html_content.encode('utf-8')
+        
+        # Предполагаем, что html_as_utf8 — это байты в UTF-8
+        html_content = html_as_utf8.decode('utf-8', errors='replace')
+        wrapped_html = f"""<!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="utf-8">
+            <title>Сообщение</title>
+        </head>
+        <body>
+        {html_content}
+        </body>
+        </html>"""
+        wrapped_html_as_utf8 = wrapped_html.encode('utf-8')
+
+        html_as_utf8 = wrapped_html_as_utf8
+
+        # Проверяем длину сообщения
+        if len(html_content) > 1000:
+            # Добавляем HTML как вложение
+            attachment_info = {
+                "filename": "message.html",
+                "content_type": "text/html",
+                "content": html_as_utf8,
+                "content_disposition": "attachment",
+                "content_id": "",
+                "size": len(html_as_utf8),
+                "encoding": "utf-8",
+                "charset": "utf-8"
+            }
+            parsed_email["attachments"].append(attachment_info)
+            
+            # Обрезаем текст для отображения в сообщении
+            clean_text = re.sub(r'<[^>]+>', '', html_content)
+            parsed_email["text_body"] = clean_text[:1000] + "..."
+        else:
+            # Для коротких сообщений оставляем как есть
+            parsed_email["text_body"] = re.sub(r'<[^>]+>', '', html_content)
+
     def extract_message_content(self, email_message) -> Dict:
         """Extract content from email message"""
         parsed_email = {
@@ -146,9 +204,10 @@ class CustomSMTPHandler:
             if content_type == "text/plain":
                 parsed_email["text_body"] = email_message.get_payload(decode=True).decode().rstrip()
             elif content_type == "text/html":
-                parsed_email["html_body"] = email_message.get_payload(decode=True).decode()
+                if parsed_email["html_body"] is None:
+                    raw_payload = email_message.get_payload(decode=True)
+                    self._process_html_content(raw_payload, email_message, parsed_email)
             else:
-                # Если это не текст, обрабатываем как вложение
                 self._process_attachment(email_message, parsed_email)
 
         return parsed_email
@@ -166,55 +225,8 @@ class CustomSMTPHandler:
                 parsed_email["text_body"] = part.get_payload(decode=True).decode().rstrip()
         elif content_type == "text/html" and 'attachment' not in content_disposition:
             if parsed_email["html_body"] is None:
-                # Получаем сырые байты
                 raw_payload = part.get_payload(decode=True)
-                
-                # Пытаемся узнать кодировку из заголовка
-                declared_charset = part.get_content_charset()
-                
-                # Если в заголовке нет charset, пробуем автоматически определить (через chardet)
-                if not declared_charset:
-                    detected = chardet.detect(raw_payload)
-                    declared_charset = detected['encoding'] or 'utf-8'
-                
-                # Декодируем в ту кодировку, которая нашлась
-                html_content = raw_payload.decode(declared_charset, errors='replace')
-                
-                # Сохраняем «чистый» HTML
-                parsed_email["html_body"] = html_content
-    
-                # При необходимости перекодируем в UTF-8 (если хотим сохранить/передать именно в UTF-8)
-                html_as_utf8 = html_content.encode('utf-8')
-                
-                # Предполагаем, что html_as_utf8 — это байты в UTF-8
-                html_content = html_as_utf8.decode('utf-8', errors='replace')
-                wrapped_html = f"""<!DOCTYPE html>
-                <html>
-                <head>
-                    <meta charset="utf-8">
-                    <title>Сообщение</title>
-                </head>
-                <body>
-                {html_content}
-                </body>
-                </html>"""
-                wrapped_html_as_utf8 = wrapped_html.encode('utf-8')
-
-                html_as_utf8 = wrapped_html_as_utf8
-
-                # Добавляем HTML как вложение
-                attachment_info = {
-                    "filename": "message.html",
-                    "content_type": "text/html",
-                    "content": html_as_utf8,
-                    "content_disposition": "attachment",
-                    "content_id": "",
-                    "size": len(html_as_utf8),
-                    "encoding": "utf-8",
-                    "charset": "utf-8"
-                }
-                parsed_email["attachments"].append(attachment_info)
-                
+                self._process_html_content(raw_payload, part, parsed_email)
         elif 'attachment' in content_disposition or 'inline' in content_disposition:
             self._process_attachment(part, parsed_email)
 
@@ -313,6 +325,77 @@ class CustomSMTPHandler:
         message_dict['local_recipient_domains'] = list(recipient_domains)
         message_dict['local_recipients'] = local_recipients
 
+    async def _prepare_media_files(self, attachments: List[Dict]) -> Dict[str, List[Dict]]:
+        """Подготавливает медиафайлы для отправки, группируя их по типу"""
+        # Группируем вложения по типу
+        MEDIA_TYPES = {
+            'photo': {
+                'image/',
+                'application/png',
+                'application/jpg',
+                'application/jpeg'
+            },
+            'video': {
+                'video/',
+                'application/mp4',
+                'application/mpeg'
+            },
+            'audio': {
+                'audio/',
+                'application/ogg',
+                'application/mp3',
+                'application/wav'
+            },
+            'animation': {
+                'image/gif'
+            }
+        }
+
+        # Группируем вложения по типу
+        media_files = {
+            'photo': [],
+            'video': [],
+            'audio': [],
+            'animation': [],
+            'document': []
+        }
+        
+        for attachment in attachments:
+            if not attachment['content']:
+                continue
+                
+            content = attachment['content']
+            filename = attachment['filename']
+            content_type = attachment['content_type'].lower()
+            
+            # Создаем новый BytesIO для каждого файла
+            file_data = BytesIO(content)
+            file_data.seek(0)  # Убеждаемся, что указатель в начале
+            file_data.name = filename
+            
+            # Проверяем размер файла
+            file_size = len(content)
+            if file_size == 0:
+                self.logger.error(f"Zero-size file detected: {filename}")
+                continue
+            
+            self.logger.info(f"Processing file {filename} of type {content_type}, size: {file_size} bytes")
+            
+            # Определяем тип медиа
+            media_type = 'document'
+            for type_name, mime_types in MEDIA_TYPES.items():
+                if any(content_type.startswith(mime_type) for mime_type in mime_types):
+                    media_type = type_name
+                    break
+            
+            media_files[media_type].append({
+                'file': file_data,
+                'filename': filename,
+                'size': file_size
+            })
+            
+        return media_files
+
     async def send_to_telegram(self, chat_id: str, message_thread_id: Optional[str], message_dict: Dict) -> bool:
         """Отправляет сообщение в Telegram"""
         try:
@@ -322,15 +405,16 @@ class CustomSMTPHandler:
             text += f"<b>Тема:</b> {html.escape(message_dict['subject'])}\n\n"
             
             if message_dict['text_body']:
-                text += f"{html.escape(message_dict['text_body'][:4000])}..."
+                text += f"{html.escape(message_dict['text_body'])}"
             elif message_dict['html_body']:
                 clean_text = re.sub(r'<[^>]+>', '', message_dict['html_body'])
-                text += f"{html.escape(clean_text[:4000])}..."
+                text += f"{html.escape(clean_text)}"
             
             # Если письмо содержит вложения, и мы отправляем их как медиа-сообщение,
             # обрезаем подпись до 1024 символов, чтобы избежать ошибки Telegram
+            # Но только если текст не был уже обработан в _process_message_part
             MAX_CAPTION_LENGTH = 1024
-            if len(text) > MAX_CAPTION_LENGTH:
+            if len(text) > MAX_CAPTION_LENGTH and not any(att['filename'] == 'message.html' for att in message_dict['attachments']):
                 text = text[:MAX_CAPTION_LENGTH - 3] + "..."
 
             # Если нет вложений, отправляем только текст
@@ -344,72 +428,8 @@ class CustomSMTPHandler:
                 return True
 
             # Группируем вложения по типу
-            MEDIA_TYPES = {
-                'photo': {
-                    'image/',
-                    'application/png',
-                    'application/jpg',
-                    'application/jpeg'
-                },
-                'video': {
-                    'video/',
-                    'application/mp4',
-                    'application/mpeg'
-                },
-                'audio': {
-                    'audio/',
-                    'application/ogg',
-                    'application/mp3',
-                    'application/wav'
-                },
-                'animation': {
-                    'image/gif'
-                }
-            }
-
-            # Группируем вложения по типу
-            media_files = {
-                'photo': [],
-                'video': [],
-                'audio': [],
-                'animation': [],
-                'document': []
-            }
+            media_files = await self._prepare_media_files(message_dict['attachments'])
             
-            for attachment in message_dict['attachments']:
-                if not attachment['content']:
-                    continue
-                    
-                content = attachment['content']
-                filename = attachment['filename']
-                content_type = attachment['content_type'].lower()
-                
-                # Создаем новый BytesIO для каждого файла
-                file_data = BytesIO(content)
-                file_data.seek(0)  # Убеждаемся, что указатель в начале
-                file_data.name = filename
-                
-                # Проверяем размер файла
-                file_size = len(content)
-                if file_size == 0:
-                    self.logger.error(f"Zero-size file detected: {filename}")
-                    continue
-                
-                self.logger.info(f"Processing file {filename} of type {content_type}, size: {file_size} bytes")
-                
-                # Определяем тип медиа
-                media_type = 'document'
-                for type_name, mime_types in MEDIA_TYPES.items():
-                    if any(content_type.startswith(mime_type) for mime_type in mime_types):
-                        media_type = type_name
-                        break
-                
-                media_files[media_type].append({
-                    'file': file_data,
-                    'filename': filename,
-                    'size': file_size
-                })
-
             # Проверяем, все ли файлы одного типа
             non_empty_types = [(type_name, files) for type_name, files in media_files.items() if files]
             if len(non_empty_types) == 1:
@@ -417,123 +437,22 @@ class CustomSMTPHandler:
                 
                 # Если файл один, отправляем его с текстом
                 if len(files) == 1:
-                    file = files[0]
-                    file['file'].seek(0)
-                    
-                    try:
-                        if media_type == 'photo':
-                            await self.bot.send_photo(
-                                chat_id=chat_id,
-                                photo=file['file'],
-                                caption=text,
-                                parse_mode='HTML',
-                                message_thread_id=message_thread_id if message_thread_id else None
-                            )
-                        elif media_type == 'video':
-                            await self.bot.send_video(
-                                chat_id=chat_id,
-                                video=file['file'],
-                                caption=text,
-                                parse_mode='HTML',
-                                message_thread_id=message_thread_id if message_thread_id else None
-                            )
-                        elif media_type == 'audio':
-                            await self.bot.send_audio(
-                                chat_id=chat_id,
-                                audio=file['file'],
-                                caption=text,
-                                parse_mode='HTML',
-                                message_thread_id=message_thread_id if message_thread_id else None
-                            )
-                        elif media_type == 'animation':
-                            await self.bot.send_animation(
-                                chat_id=chat_id,
-                                animation=file['file'],
-                                caption=text,
-                                parse_mode='HTML',
-                                message_thread_id=message_thread_id if message_thread_id else None
-                            )
-                        else:  # document
-                            await self.bot.send_document(
-                                chat_id=chat_id,
-                                document=file['file'],
-                                caption=text,
-                                parse_mode='HTML',
-                                message_thread_id=message_thread_id if message_thread_id else None
-                            )
-                    finally:
-                        file['file'].close()
-                    
-                    return True
+                    return await self._send_single_file(
+                        chat_id, 
+                        message_thread_id, 
+                        media_type, 
+                        files[0], 
+                        text
+                    )
                 
                 # Если несколько файлов одного типа, отправляем их группой с текстом в первом файле
-                try:
-                    if media_type == 'photo':
-                        media_group = [
-                            InputMediaPhoto(
-                                media=files[0]['file'],
-                                caption=text,
-                                parse_mode='HTML'
-                            )
-                        ]
-                        media_group.extend([
-                            InputMediaPhoto(
-                                media=img['file']
-                            ) for img in files[1:]
-                        ])
-                    elif media_type == 'video':
-                        media_group = [
-                            InputMediaVideo(
-                                media=files[0]['file'],
-                                caption=text,
-                                parse_mode='HTML'
-                            )
-                        ]
-                        media_group.extend([
-                            InputMediaVideo(
-                                media=vid['file']
-                            ) for vid in files[1:]
-                        ])
-                    elif media_type == 'document':
-                        media_group = [
-                            InputMediaDocument(
-                                media=files[0]['file'],
-                                caption=text,
-                                parse_mode='HTML'
-                            )
-                        ]
-                        media_group.extend([
-                            InputMediaDocument(
-                                media=doc['file']
-                            ) for doc in files[1:]
-                        ])
-                    else:
-                        # Для других типов отправляем текст отдельно
-                        await self.bot.send_message(
-                            chat_id=chat_id,
-                            text=text,
-                            parse_mode='HTML',
-                            message_thread_id=message_thread_id if message_thread_id else None
-                        )
-                        return await self._send_media_group(chat_id, message_thread_id, media_type, files)
-
-                    await self.bot.send_media_group(
-                        chat_id=chat_id,
-                        media=media_group,
-                        message_thread_id=message_thread_id if message_thread_id else None
-                    )
-                    return True
-
-                except Exception as e:
-                    self.logger.error(f"Failed to send media group: {str(e)}")
-                    # Если не удалось отправить группой, отправляем текст и файлы по отдельности
-                    await self.bot.send_message(
-                        chat_id=chat_id,
-                        text=text,
-                        parse_mode='HTML',
-                        message_thread_id=message_thread_id if message_thread_id else None
-                    )
-                    return await self._send_files_individually(chat_id, message_thread_id, media_type, files)
+                return await self._send_media_group_with_text(
+                    chat_id, 
+                    message_thread_id, 
+                    media_type, 
+                    files, 
+                    text
+                )
 
             # Если файлы разных типов, отправляем текст и группы файлов отдельно
             await self.bot.send_message(
@@ -554,8 +473,137 @@ class CustomSMTPHandler:
             self.logger.error(f"Error in send_to_telegram: {str(e)}", exc_info=True)
             return False
 
-    async def _send_media_group(self, chat_id: str, message_thread_id: Optional[str], media_type: str, files: List[Dict]) -> bool:
-        """Вспомогательный метод для отправки группы медиафайлов"""
+    async def _send_media(self, chat_id: str, message_thread_id: Optional[str], 
+                         media_type: str, file: Dict, text: Optional[str] = None) -> bool:
+        """Общий метод для отправки медиафайлов"""
+        try:
+            file['file'].seek(0)
+            
+            if media_type == 'photo':
+                await self.bot.send_photo(
+                    chat_id=chat_id,
+                    photo=file['file'],
+                    caption=text,
+                    parse_mode='HTML' if text else None,
+                    message_thread_id=message_thread_id if message_thread_id else None
+                )
+            elif media_type == 'video':
+                await self.bot.send_video(
+                    chat_id=chat_id,
+                    video=file['file'],
+                    caption=text,
+                    parse_mode='HTML' if text else None,
+                    message_thread_id=message_thread_id if message_thread_id else None
+                )
+            elif media_type == 'audio':
+                await self.bot.send_audio(
+                    chat_id=chat_id,
+                    audio=file['file'],
+                    caption=text,
+                    parse_mode='HTML' if text else None,
+                    message_thread_id=message_thread_id if message_thread_id else None
+                )
+            elif media_type == 'animation':
+                await self.bot.send_animation(
+                    chat_id=chat_id,
+                    animation=file['file'],
+                    caption=text,
+                    parse_mode='HTML' if text else None,
+                    message_thread_id=message_thread_id if message_thread_id else None
+                )
+            else:  # document
+                await self.bot.send_document(
+                    chat_id=chat_id,
+                    document=file['file'],
+                    caption=text,
+                    parse_mode='HTML' if text else None,
+                    message_thread_id=message_thread_id if message_thread_id else None
+                )
+            return True
+        except Exception as e:
+            self.logger.error(f"Failed to send media: {str(e)}")
+            return False
+        finally:
+            file['file'].close()
+
+    async def _send_single_file(self, chat_id: str, message_thread_id: Optional[str], 
+                               media_type: str, file: Dict, text: str) -> bool:
+        """Отправляет один файл с текстом"""
+        return await self._send_media(chat_id, message_thread_id, media_type, file, text)
+
+    async def _send_media_group_with_text(self, chat_id: str, message_thread_id: Optional[str], 
+                                         media_type: str, files: List[Dict], text: str) -> bool:
+        """Отправляет группу медиафайлов с текстом в первом файле"""
+        try:
+            if media_type == 'photo':
+                media_group = [
+                    InputMediaPhoto(
+                        media=files[0]['file'],
+                        caption=text,
+                        parse_mode='HTML'
+                    )
+                ]
+                media_group.extend([
+                    InputMediaPhoto(
+                        media=img['file']
+                    ) for img in files[1:]
+                ])
+            elif media_type == 'video':
+                media_group = [
+                    InputMediaVideo(
+                        media=files[0]['file'],
+                        caption=text,
+                        parse_mode='HTML'
+                    )
+                ]
+                media_group.extend([
+                    InputMediaVideo(
+                        media=vid['file']
+                    ) for vid in files[1:]
+                ])
+            elif media_type == 'document':
+                media_group = [
+                    InputMediaDocument(
+                        media=files[0]['file'],
+                        caption=text,
+                        parse_mode='HTML'
+                    )
+                ]
+                media_group.extend([
+                    InputMediaDocument(
+                        media=doc['file']
+                    ) for doc in files[1:]
+                ])
+            else:
+                # Для других типов отправляем текст отдельно
+                await self.bot.send_message(
+                    chat_id=chat_id,
+                    text=text,
+                    parse_mode='HTML',
+                    message_thread_id=message_thread_id if message_thread_id else None
+                )
+                return await self._send_media_group(chat_id, message_thread_id, media_type, files)
+
+            await self.bot.send_media_group(
+                chat_id=chat_id,
+                media=media_group,
+                message_thread_id=message_thread_id if message_thread_id else None
+            )
+            return True
+        except Exception as e:
+            self.logger.error(f"Failed to send media group: {str(e)}")
+            # Если не удалось отправить группой, отправляем текст и файлы по отдельности
+            await self.bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                parse_mode='HTML',
+                message_thread_id=message_thread_id if message_thread_id else None
+            )
+            return await self._send_files_individually(chat_id, message_thread_id, media_type, files)
+
+    async def _send_media_group(self, chat_id: str, message_thread_id: Optional[str], 
+                               media_type: str, files: List[Dict]) -> bool:
+        """Отправляет группу медиафайлов"""
         try:
             if media_type == 'photo':
                 media_group = [InputMediaPhoto(media=img['file']) for img in files]
@@ -576,29 +624,17 @@ class CustomSMTPHandler:
             self.logger.error(f"Failed to send media group: {str(e)}")
             return await self._send_files_individually(chat_id, message_thread_id, media_type, files)
 
-    async def _send_files_individually(self, chat_id: str, message_thread_id: Optional[str], media_type: str, files: List[Dict]) -> bool:
-        """Вспомогательный метод для отправки файлов по одному"""
+    async def _send_files_individually(self, chat_id: str, message_thread_id: Optional[str], 
+                                      media_type: str, files: List[Dict]) -> bool:
+        """Отправляет файлы по одному"""
         success = True
         for file in files:
             try:
-                file['file'].seek(0)
-                if media_type == 'photo':
-                    await self.bot.send_photo(
-                        chat_id=chat_id,
-                        photo=file['file'],
-                        message_thread_id=message_thread_id if message_thread_id else None
-                    )
-                elif media_type == 'document':
-                    await self.bot.send_document(
-                        chat_id=chat_id,
-                        document=file['file'],
-                        message_thread_id=message_thread_id if message_thread_id else None
-                    )
+                if not await self._send_media(chat_id, message_thread_id, media_type, file):
+                    success = False
             except Exception as e:
                 self.logger.error(f"Failed to send individual file: {str(e)}")
                 success = False
-            finally:
-                file['file'].close()
         return success
 
     async def handle_DATA(self, server: SMTP, session: Session,
