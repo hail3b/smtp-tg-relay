@@ -153,30 +153,21 @@ class CustomSMTPHandler:
         </body>
         </html>"""
         wrapped_html_as_utf8 = wrapped_html.encode('utf-8')
-
         html_as_utf8 = wrapped_html_as_utf8
 
-        # Проверяем длину сообщения
-        if len(html_content) > 1000:
-            # Добавляем HTML как вложение
-            attachment_info = {
-                "filename": "message.html",
-                "content_type": "text/html",
-                "content": html_as_utf8,
-                "content_disposition": "attachment",
-                "content_id": "",
-                "size": len(html_as_utf8),
-                "encoding": "utf-8",
-                "charset": "utf-8"
-            }
-            parsed_email["attachments"].append(attachment_info)
-            
-            # Обрезаем текст для отображения в сообщении
-            clean_text = re.sub(r'<[^>]+>', '', html_content)
-            parsed_email["text_body"] = clean_text[:1000] + "..."
-        else:
-            # Для коротких сообщений оставляем как есть
-            parsed_email["text_body"] = re.sub(r'<[^>]+>', '', html_content)
+        # Добавляем HTML как вложение
+        attachment_info = {
+            "filename": "message.html",
+            "content_type": "text/html",
+            "content": html_as_utf8,
+            "content_disposition": "attachment",
+            "content_id": "",
+            "size": len(html_as_utf8),
+            "encoding": "utf-8",
+            "charset": "utf-8"
+        }
+        parsed_email["attachments"].append(attachment_info)
+        
 
     def extract_message_content(self, email_message) -> Dict:
         """Extract content from email message"""
@@ -478,10 +469,6 @@ class CustomSMTPHandler:
         try:
             file['file'].seek(0)
             
-            # Проверяем длину подписи для Telegram (максимум 1024 символа)
-            if text:
-                text = self._truncate_text(text)
-            
             if media_type == 'photo':
                 await self.bot.send_photo(
                     chat_id=chat_id,
@@ -533,8 +520,6 @@ class CustomSMTPHandler:
                                          media_type: str, files: List[Dict], text: str) -> bool:
         """Отправляет группу медиафайлов с текстом в первом файле"""
         try:
-            # Проверяем длину подписи для Telegram (максимум 1024 символа)
-            text = self._truncate_text(text)
             
             if media_type == 'photo':
                 media_group = [
