@@ -396,6 +396,12 @@ class CustomSMTPHandler:
             
         return media_files
 
+    def _truncate_text(self, text: str, max_length: int = 1024) -> str:
+        """Обрезает текст до максимальной длины с добавлением многоточия"""
+        if len(text) > max_length:
+            return text[:max_length - 3] + "..."
+        return text
+
     async def send_to_telegram(self, chat_id: str, message_thread_id: Optional[str], message_dict: Dict) -> bool:
         """Отправляет сообщение в Telegram"""
         try:
@@ -404,31 +410,16 @@ class CustomSMTPHandler:
             text += f"<b>От:</b> {html.escape(message_dict['from'])}\n"
             text += f"<b>Тема:</b> {html.escape(message_dict['subject'])}\n\n"
             
-            if message_dict['text_body']:
-                text += f"{html.escape(message_dict['text_body'])}"
-            elif message_dict['html_body']:
-                clean_text = re.sub(r'<[^>]+>', '', message_dict['html_body'])
+            body = message_dict.get('text_body') or message_dict.get('html_body')
+            if body:
+                clean_text = re.sub(r'<[^>]+>', '', body)
                 text += f"{html.escape(clean_text)}"
-            
+                
             # Если письмо содержит вложения, и мы отправляем их как медиа-сообщение,
             # обрезаем подпись до 1024 символов, чтобы избежать ошибки Telegram
             # Но только если текст не был уже обработан в _process_message_part
-            MAX_CAPTION_LENGTH = 1024
-            if len(text) > MAX_CAPTION_LENGTH and not any(att['filename'] == 'message.html' for att in message_dict['attachments']):
-                # Отправляем первую часть текста отдельным сообщением
-                await self.bot.send_message(
-                    chat_id=chat_id,
-                    text=text[:MAX_CAPTION_LENGTH - 3] + "...",
-                    parse_mode='HTML',
-                    message_thread_id=message_thread_id if message_thread_id else None
-                )
-                # Если есть вложения, отправляем их без текста
-                if message_dict['attachments']:
-                    media_files = await self._prepare_media_files(message_dict['attachments'])
-                    for media_type, files in media_files.items():
-                        if files:
-                            await self._send_media_group(chat_id, message_thread_id, media_type, files)
-                return True
+            if not any(att['filename'] == 'message.html' for att in message_dict['attachments']):
+                text = self._truncate_text(text)
 
             # Если нет вложений, отправляем только текст
             if not message_dict['attachments']:
@@ -493,16 +484,8 @@ class CustomSMTPHandler:
             file['file'].seek(0)
             
             # Проверяем длину подписи для Telegram (максимум 1024 символа)
-            MAX_CAPTION_LENGTH = 1024
-            if text and len(text) > MAX_CAPTION_LENGTH:
-                # Если текст слишком длинный, отправляем его отдельным сообщением
-                await self.bot.send_message(
-                    chat_id=chat_id,
-                    text=text,
-                    parse_mode='HTML',
-                    message_thread_id=message_thread_id if message_thread_id else None
-                )
-                text = None  # Сбрасываем текст для медиафайла
+            if text:
+                text = self._truncate_text(text)
             
             if media_type == 'photo':
                 await self.bot.send_photo(
@@ -551,15 +534,13 @@ class CustomSMTPHandler:
         finally:
             file['file'].close()
 
-    async def _send_single_file(self, chat_id: str, message_thread_id: Optional[str], 
-                               media_type: str, file: Dict, text: str) -> bool:
-        """Отправляет один файл с текстом"""
-        return await self._send_media(chat_id, message_thread_id, media_type, file, text)
-
     async def _send_media_group_with_text(self, chat_id: str, message_thread_id: Optional[str], 
                                          media_type: str, files: List[Dict], text: str) -> bool:
         """Отправляет группу медиафайлов с текстом в первом файле"""
         try:
+            # Проверяем длину подписи для Telegram (максимум 1024 символа)
+            text = self._truncate_text(text)
+            
             if media_type == 'photo':
                 media_group = [
                     InputMediaPhoto(
