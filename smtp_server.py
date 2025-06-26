@@ -397,9 +397,7 @@ class CustomSMTPHandler:
         """Отправляет сообщение в Telegram"""
         try:
             # Формируем текст сообщения
-            text = f"📧 <b>Новое email сообщение</b>\n\n"
-            text += f"<b>От:</b> {html.escape(message_dict['from'])}\n"
-            text += f"<b>Тема:</b> {html.escape(message_dict['subject'])}\n\n"
+            text = f"{html.escape(message_dict['subject'])}\n"
             
             body = message_dict.get('text_body') or message_dict.get('html_body')
             if body:
