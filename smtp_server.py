@@ -69,6 +69,7 @@ class LocalRecipient:
     """Структура данных для локального получателя"""
     chat_id: str
     message_thread_id: Optional[str] = None
+    silent: bool = False
     
     @classmethod
     def parse(cls, local_name: str) -> Optional['LocalRecipient']:
@@ -76,6 +77,12 @@ class LocalRecipient:
         if not local_name:
             return None
             
+        # Выделяем флаги, отделённые точкой
+        flags = set()
+        if '.' in local_name:
+            local_name, flag_part = local_name.split('.', 1)
+            flags = set(flag_part.split('.'))
+
         parts = local_name.split('!')
             
         if len(parts) == 1:
@@ -84,13 +91,13 @@ class LocalRecipient:
         # Если только одна часть, предполагается, что это chat_id
         if len(parts) == 1:
             chat_id = parts[0].lstrip("id")  # Убираем префикс "id" если он есть
-            return cls(chat_id=chat_id)
+            return cls(chat_id=chat_id, silent=('s' in flags or 'silent' in flags))
         
         # Если две части, предполагается, что это chat_id и message_thread_id
         elif len(parts) == 2:
             chat_id = parts[0].lstrip("id")  # Убираем префикс "id" если он есть
             message_thread_id = parts[1]
-            return cls(chat_id=chat_id, message_thread_id=message_thread_id)
+            return cls(chat_id=chat_id, message_thread_id=message_thread_id, silent=('s' in flags or 'silent' in flags))
 
         return None
 
@@ -391,7 +398,8 @@ class CustomSMTPHandler:
                 if recipient:
                     local_recipients.append({
                         'chat_id': recipient.chat_id,
-                        'message_thread_id': recipient.message_thread_id
+                        'message_thread_id': recipient.message_thread_id,
+                        'silent': recipient.silent
                     })
         
         self.logger.info(f"Processing local delivery for domains: {', '.join(recipient_domains)}")
@@ -476,7 +484,7 @@ class CustomSMTPHandler:
             return text[:max_length - 3] + "..."
         return text
 
-    async def send_to_telegram(self, chat_id: str, message_thread_id: Optional[str], message_dict: Dict) -> bool:
+    async def send_to_telegram(self, chat_id: str, message_thread_id: Optional[str], message_dict: Dict, silent: bool = False) -> bool:
         """Отправляет сообщение в Telegram"""
         try:
             # Формируем текст сообщения
@@ -494,6 +502,7 @@ class CustomSMTPHandler:
                     chat_id=chat_id,
                     text=text,
                     parse_mode='HTML',
+                    disable_notification=silent,
                     message_thread_id=message_thread_id if message_thread_id else None
                 )
                 return True
@@ -509,20 +518,22 @@ class CustomSMTPHandler:
                 # Если файл один, отправляем его с текстом
                 if len(files) == 1:
                     return await self._send_media(
-                        chat_id, 
-                        message_thread_id, 
-                        media_type, 
-                        files[0], 
-                        text
+                        chat_id,
+                        message_thread_id,
+                        media_type,
+                        files[0],
+                        text,
+                        silent
                     )
                 
                 # Если несколько файлов одного типа, отправляем их группой с текстом в первом файле
                 return await self._send_media_group_with_text(
-                    chat_id, 
-                    message_thread_id, 
-                    media_type, 
-                    files, 
-                    text
+                    chat_id,
+                    message_thread_id,
+                    media_type,
+                    files,
+                    text,
+                    silent
                 )
 
             # Если файлы разных типов, отправляем текст и группы файлов отдельно
@@ -530,13 +541,14 @@ class CustomSMTPHandler:
                 chat_id=chat_id,
                 text=text,
                 parse_mode='HTML',
+                disable_notification=silent,
                 message_thread_id=message_thread_id if message_thread_id else None
             )
             
             # Отправляем каждую группу файлов
             for media_type, files in media_files.items():
                 if files:
-                    await self._send_media_group(chat_id, message_thread_id, media_type, files)
+                    await self._send_media_group(chat_id, message_thread_id, media_type, files, silent)
 
             return True
 
@@ -544,8 +556,8 @@ class CustomSMTPHandler:
             self.logger.error(f"Error in send_to_telegram: {str(e)}", exc_info=True)
             return False
 
-    async def _send_media(self, chat_id: str, message_thread_id: Optional[str], 
-                         media_type: str, file: Dict, text: Optional[str] = None) -> bool:
+    async def _send_media(self, chat_id: str, message_thread_id: Optional[str],
+                         media_type: str, file: Dict, text: Optional[str] = None, silent: bool = False) -> bool:
         """Общий метод для отправки медиафайлов"""
         try:
             file['file'].seek(0)
@@ -556,6 +568,7 @@ class CustomSMTPHandler:
                     photo=file['file'],
                     caption=text,
                     parse_mode='HTML' if text else None,
+                    disable_notification=silent,
                     message_thread_id=message_thread_id if message_thread_id else None
                 )
             elif media_type == 'video':
@@ -564,6 +577,7 @@ class CustomSMTPHandler:
                     video=file['file'],
                     caption=text,
                     parse_mode='HTML' if text else None,
+                    disable_notification=silent,
                     message_thread_id=message_thread_id if message_thread_id else None
                 )
             elif media_type == 'audio':
@@ -572,6 +586,7 @@ class CustomSMTPHandler:
                     audio=file['file'],
                     caption=text,
                     parse_mode='HTML' if text else None,
+                    disable_notification=silent,
                     message_thread_id=message_thread_id if message_thread_id else None
                 )
             elif media_type == 'animation':
@@ -580,6 +595,7 @@ class CustomSMTPHandler:
                     animation=file['file'],
                     caption=text,
                     parse_mode='HTML' if text else None,
+                    disable_notification=silent,
                     message_thread_id=message_thread_id if message_thread_id else None
                 )
             else:  # document
@@ -588,6 +604,7 @@ class CustomSMTPHandler:
                     document=file['file'],
                     caption=text,
                     parse_mode='HTML' if text else None,
+                    disable_notification=silent,
                     message_thread_id=message_thread_id if message_thread_id else None
                 )
             return True
@@ -597,8 +614,8 @@ class CustomSMTPHandler:
         finally:
             file['file'].close()
 
-    async def _send_media_group_with_text(self, chat_id: str, message_thread_id: Optional[str], 
-                                         media_type: str, files: List[Dict], text: str) -> bool:
+    async def _send_media_group_with_text(self, chat_id: str, message_thread_id: Optional[str],
+                                         media_type: str, files: List[Dict], text: str, silent: bool = False) -> bool:
         """Отправляет группу медиафайлов с текстом в первом файле"""
         try:
             
@@ -647,13 +664,15 @@ class CustomSMTPHandler:
                     chat_id=chat_id,
                     text=text,
                     parse_mode='HTML',
+                    disable_notification=silent,
                     message_thread_id=message_thread_id if message_thread_id else None
                 )
-                return await self._send_media_group(chat_id, message_thread_id, media_type, files)
+                return await self._send_media_group(chat_id, message_thread_id, media_type, files, silent)
 
             await self.bot.send_media_group(
                 chat_id=chat_id,
                 media=media_group,
+                disable_notification=silent,
                 message_thread_id=message_thread_id if message_thread_id else None
             )
             return True
@@ -664,12 +683,13 @@ class CustomSMTPHandler:
                 chat_id=chat_id,
                 text=text,
                 parse_mode='HTML',
+                disable_notification=silent,
                 message_thread_id=message_thread_id if message_thread_id else None
             )
-            return await self._send_files_individually(chat_id, message_thread_id, media_type, files)
+            return await self._send_files_individually(chat_id, message_thread_id, media_type, files, silent)
 
-    async def _send_media_group(self, chat_id: str, message_thread_id: Optional[str], 
-                               media_type: str, files: List[Dict]) -> bool:
+    async def _send_media_group(self, chat_id: str, message_thread_id: Optional[str],
+                               media_type: str, files: List[Dict], silent: bool = False) -> bool:
         """Отправляет группу медиафайлов"""
         try:
             if media_type == 'photo':
@@ -684,20 +704,21 @@ class CustomSMTPHandler:
             await self.bot.send_media_group(
                 chat_id=chat_id,
                 media=media_group,
+                disable_notification=silent,
                 message_thread_id=message_thread_id if message_thread_id else None
             )
             return True
         except Exception as e:
             self.logger.error(f"Failed to send media group: {str(e)}")
-            return await self._send_files_individually(chat_id, message_thread_id, media_type, files)
+            return await self._send_files_individually(chat_id, message_thread_id, media_type, files, silent)
 
-    async def _send_files_individually(self, chat_id: str, message_thread_id: Optional[str], 
-                                      media_type: str, files: List[Dict]) -> bool:
+    async def _send_files_individually(self, chat_id: str, message_thread_id: Optional[str],
+                                      media_type: str, files: List[Dict], silent: bool = False) -> bool:
         """Отправляет файлы по одному"""
         success = True
         for file in files:
             try:
-                if not await self._send_media(chat_id, message_thread_id, media_type, file):
+                if not await self._send_media(chat_id, message_thread_id, media_type, file, None, silent):
                     success = False
             except Exception as e:
                 self.logger.error(f"Failed to send individual file: {str(e)}")
@@ -752,7 +773,8 @@ class CustomSMTPHandler:
                     success = await self.send_to_telegram(
                         chat_id=recipient['chat_id'],
                         message_thread_id=recipient['message_thread_id'],
-                        message_dict=message_dict
+                        message_dict=message_dict,
+                        silent=recipient.get('silent', False)
                     )
                     self.stats.record_delivery(success)
                     if not success:
