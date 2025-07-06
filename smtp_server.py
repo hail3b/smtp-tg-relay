@@ -17,7 +17,9 @@ from config import (
     MAX_MESSAGE_SIZE,
     MAX_STORED_MESSAGES,
     get_local_domains,
-    TELEGRAM_BOT_TOKEN
+    TELEGRAM_BOT_TOKEN,
+    STATS_ADMIN_CHAT_ID,
+    STATS_INTERVAL
 )
 
 from telegram import Bot, InputMediaPhoto, InputMediaVideo, InputMediaDocument, InputMediaAudio, InputMediaAnimation
@@ -92,6 +94,55 @@ class LocalRecipient:
 
         return None
 
+
+@dataclass
+class Stats:
+    """Statistics for processed messages"""
+    total_messages: int = 0
+    delivered_messages: int = 0
+    failed_messages: int = 0
+    ip_stats: Dict[str, int] = None
+    recipient_stats: Dict[str, int] = None
+
+    def __post_init__(self):
+        self.ip_stats = {}
+        self.recipient_stats = {}
+
+    def reset(self) -> None:
+        self.total_messages = 0
+        self.delivered_messages = 0
+        self.failed_messages = 0
+        self.ip_stats.clear()
+        self.recipient_stats.clear()
+
+    def record_message(self, ip: str, recipients: List[str]) -> None:
+        self.total_messages += 1
+        if ip:
+            self.ip_stats[ip] = self.ip_stats.get(ip, 0) + 1
+        for rcpt in recipients:
+            self.recipient_stats[rcpt] = self.recipient_stats.get(rcpt, 0) + 1
+
+    def record_delivery(self, success: bool) -> None:
+        if success:
+            self.delivered_messages += 1
+        else:
+            self.failed_messages += 1
+
+    def generate_report(self) -> str:
+        lines = [
+            f"Всего сообщений: {self.total_messages}",
+            f"Доставлено: {self.delivered_messages}",
+            f"Не доставлено: {self.failed_messages}",
+            "",
+            "Статистика по IP:",
+        ]
+        for ip, count in self.ip_stats.items():
+            lines.append(f" - {ip}: {count}")
+        lines.append("\nСтатистика по получателям:")
+        for rcpt, count in self.recipient_stats.items():
+            lines.append(f" - {rcpt}: {count}")
+        return "\n".join(lines)
+
 class CustomSMTPHandler:
     """SMTP request handler"""
 
@@ -100,6 +151,38 @@ class CustomSMTPHandler:
         self.messages: deque = deque(maxlen=config.max_stored_messages)
         self.logger = logging.getLogger(__name__)
         self.bot = Bot(token=TELEGRAM_BOT_TOKEN)
+        self.stats = Stats()
+        self.stats_admin_chat_id = STATS_ADMIN_CHAT_ID
+        self.stats_interval = STATS_INTERVAL
+        self._stats_task: Optional[asyncio.Task] = None
+
+    def start_stats(self) -> None:
+        """Start periodic statistics reporting"""
+        if self.stats_admin_chat_id and self.stats_interval > 0:
+            self._stats_task = asyncio.create_task(self._stats_loop())
+
+    def stop_stats(self) -> None:
+        """Stop periodic statistics reporting"""
+        if self._stats_task:
+            self._stats_task.cancel()
+
+    async def _stats_loop(self) -> None:
+        while True:
+            await asyncio.sleep(self.stats_interval)
+            await self.send_stats()
+
+    async def send_stats(self) -> None:
+        if not self.stats_admin_chat_id:
+            return
+        report = self.stats.generate_report()
+        if not report:
+            return
+        try:
+            await self.bot.send_message(chat_id=self.stats_admin_chat_id, text=report)
+        except Exception as e:
+            self.logger.error(f"Failed to send stats: {e}")
+        finally:
+            self.stats.reset()
 
     async def validate_envelope(self, envelope: Envelope) -> Tuple[bool, str]:
         if len(envelope.content) > self.config.max_message_size:
@@ -655,6 +738,9 @@ class CustomSMTPHandler:
                 'X-Host-Name': host_name or '',
                 'is_local_delivery': False
             }
+
+            # Update statistics about the message
+            self.stats.record_message(client_ip, envelope.rcpt_tos)
             
             # Проверяем получателей а принадлежность к локальному домену
             has_local_recipients = any(self._is_local_recipient(rcpt) for rcpt in envelope.rcpt_tos)
@@ -668,8 +754,11 @@ class CustomSMTPHandler:
                         message_thread_id=recipient['message_thread_id'],
                         message_dict=message_dict
                     )
+                    self.stats.record_delivery(success)
                     if not success:
-                        self.logger.warning(f"Failed to deliver message to Telegram chat {recipient['chat_id']}")
+                        self.logger.warning(
+                            f"Failed to deliver message to Telegram chat {recipient['chat_id']}"
+                        )
 
             self.messages.append(message_dict)
             
@@ -702,6 +791,7 @@ async def start_server(config: ServerConfig) -> aiosmtpd.controller.Controller:
         port=config.port
     )
     controller.start()
+    handler.start_stats()
     return controller
 
 async def main() -> None:
@@ -730,6 +820,8 @@ async def main() -> None:
         raise
     finally:
         if server is not None:
+            await server.handler.send_stats()
+            server.handler.stop_stats()
             server.stop()
             logger.info('Server stopped')
 
