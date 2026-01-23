@@ -478,34 +478,63 @@ class CustomSMTPHandler:
             
         return media_files
 
-    def _truncate_text(self, text: str, max_length: int = 1024) -> str:
+    def _sanitize_text(self, text: Optional[str]) -> str:
+        """Санитайзит текст для безопасной отправки в HTML"""
+        if not text:
+            return ""
+        return html.escape(text)
+
+    def _truncate_text(self, text: Optional[str], max_length: int = 1024) -> str:
         """Обрезает текст до максимальной длины с добавлением многоточия"""
+        if not text:
+            return ""
         if len(text) > max_length:
             return text[:max_length - 3] + "..."
         return text
+
+    def _split_text(self, text: str, max_length: int = 4096) -> List[str]:
+        """Разбивает текст на части по максимальной длине"""
+        if not text:
+            return []
+        return [text[i:i + max_length] for i in range(0, len(text), max_length)]
+
+    def _build_message_text(self, subject: Optional[str], body: Optional[str]) -> str:
+        """Формирует и санитайзит итоговый текст сообщения"""
+        subject_text = self._sanitize_text(subject)
+        body_text = self._sanitize_text(body)
+        if subject_text and body_text:
+            return f"{subject_text}\n{body_text}"
+        return subject_text or body_text
+
+    async def _send_text_messages(self, chat_id: str, message_thread_id: Optional[str],
+                                  text: str, silent: bool = False) -> None:
+        """Отправляет текст, разбивая его на части по лимиту Telegram"""
+        for chunk in self._split_text(text):
+            await self.bot.send_message(
+                chat_id=chat_id,
+                text=chunk,
+                parse_mode='HTML',
+                disable_notification=silent,
+                message_thread_id=message_thread_id if message_thread_id else None
+            )
 
     async def send_to_telegram(self, chat_id: str, message_thread_id: Optional[str], message_dict: Dict, silent: bool = False) -> bool:
         """Отправляет сообщение в Telegram"""
         try:
             # Формируем текст сообщения
-            text = f"{html.escape(message_dict['subject'])}\n"
-            
             body = message_dict.get('text_body') or message_dict.get('html_body')
-            if body:
-                text += f"{html.escape(body)}"
-            
-            text = self._truncate_text(text)            
+            text = self._build_message_text(message_dict.get('subject'), body)
+            needs_full_text_message = len(text) > 1024
+            caption_text = self._truncate_text(text) if needs_full_text_message else text
+            caption_text = caption_text or None
             
             # Если нет вложений, отправляем только текст
             if not message_dict['attachments']:
-                await self.bot.send_message(
-                    chat_id=chat_id,
-                    text=text,
-                    parse_mode='HTML',
-                    disable_notification=silent,
-                    message_thread_id=message_thread_id if message_thread_id else None
-                )
+                await self._send_text_messages(chat_id, message_thread_id, text, silent)
                 return True
+
+            if needs_full_text_message and text:
+                await self._send_text_messages(chat_id, message_thread_id, text, silent)
 
             # Группируем вложения по типу
             media_files = await self._prepare_media_files(message_dict['attachments'])
@@ -522,7 +551,7 @@ class CustomSMTPHandler:
                         message_thread_id,
                         media_type,
                         files[0],
-                        text,
+                        caption_text,
                         silent
                     )
                 
@@ -532,18 +561,19 @@ class CustomSMTPHandler:
                     message_thread_id,
                     media_type,
                     files,
-                    text,
+                    caption_text or "",
                     silent
                 )
 
             # Если файлы разных типов, отправляем текст и группы файлов отдельно
-            await self.bot.send_message(
-                chat_id=chat_id,
-                text=text,
-                parse_mode='HTML',
-                disable_notification=silent,
-                message_thread_id=message_thread_id if message_thread_id else None
-            )
+            if not needs_full_text_message and text:
+                await self.bot.send_message(
+                    chat_id=chat_id,
+                    text=text,
+                    parse_mode='HTML',
+                    disable_notification=silent,
+                    message_thread_id=message_thread_id if message_thread_id else None
+                )
             
             # Отправляем каждую группу файлов
             for media_type, files in media_files.items():
