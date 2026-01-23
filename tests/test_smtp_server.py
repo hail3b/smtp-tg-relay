@@ -83,28 +83,27 @@ def test_text_helpers():
     assert handler._build_message_text(None, "Body") == "Body"
 
 
-@pytest.mark.asyncio
-async def test_validate_envelope_limits_and_headers():
+def test_validate_envelope_limits_and_headers():
     handler = _make_handler()
     envelope = Envelope()
     envelope.content = b"A" * (handler.config.max_message_size + 1)
-    ok, message = await handler.validate_envelope(envelope)
+    ok, message = asyncio.run(handler.validate_envelope(envelope))
     assert ok is False
     assert message.startswith("552")
 
     envelope.content = b"A" * 10
-    ok, message = await handler.validate_envelope(envelope)
+    ok, message = asyncio.run(handler.validate_envelope(envelope))
     assert ok is False
     assert message.startswith("451")
 
     envelope.content = _make_email_bytes(to_addr="to@example.com")
-    ok, message = await handler.validate_envelope(envelope)
+    ok, message = asyncio.run(handler.validate_envelope(envelope))
     assert ok is False
     assert "Missing required header: From" in message
 
     envelope.content = _make_email_bytes(from_addr="from@example.com")
     envelope.rcpt_tos = ["rcpt@example.com"]
-    ok, message = await handler.validate_envelope(envelope)
+    ok, message = asyncio.run(handler.validate_envelope(envelope))
     assert ok is True
     assert message == ""
 
@@ -139,8 +138,7 @@ def test_process_attachment_assigns_filename():
     assert parsed["attachments"][0]["filename"].startswith("attachment_0")
 
 
-@pytest.mark.asyncio
-async def test_prepare_media_files_grouping():
+def test_prepare_media_files_grouping():
     handler = _make_handler()
     attachments = [
         {"filename": "img.png", "content_type": "image/png", "content": b"1"},
@@ -150,7 +148,7 @@ async def test_prepare_media_files_grouping():
         {"filename": "doc.pdf", "content_type": "application/pdf", "content": b"5"},
     ]
 
-    grouped = await handler._prepare_media_files(attachments)
+    grouped = asyncio.run(handler._prepare_media_files(attachments))
     assert len(grouped["photo"]) == 1
     assert len(grouped["video"]) == 1
     assert len(grouped["audio"]) == 1
@@ -158,8 +156,7 @@ async def test_prepare_media_files_grouping():
     assert len(grouped["document"]) == 1
 
 
-@pytest.mark.asyncio
-async def test_send_to_telegram_splits_long_text():
+def test_send_to_telegram_splits_long_text():
     handler = _make_handler()
     handler.bot.send_message = AsyncMock()
     message_dict = {
@@ -169,14 +166,13 @@ async def test_send_to_telegram_splits_long_text():
         "attachments": [],
     }
 
-    result = await handler.send_to_telegram("123", None, message_dict)
+    result = asyncio.run(handler.send_to_telegram("123", None, message_dict))
     assert result is True
     expected_text = handler._build_message_text("Subject", message_dict["text_body"])
     assert handler.bot.send_message.await_count == len(handler._split_text(expected_text))
 
 
-@pytest.mark.asyncio
-async def test_send_to_telegram_multiple_photos_uses_media_group():
+def test_send_to_telegram_multiple_photos_uses_media_group():
     handler = _make_handler()
     handler.bot.send_media_group = AsyncMock()
     handler.bot.send_message = AsyncMock()
@@ -190,14 +186,13 @@ async def test_send_to_telegram_multiple_photos_uses_media_group():
         ],
     }
 
-    result = await handler.send_to_telegram("123", None, message_dict)
+    result = asyncio.run(handler.send_to_telegram("123", None, message_dict))
     assert result is True
     handler.bot.send_media_group.assert_awaited_once()
     handler.bot.send_message.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-async def test_handle_data_processes_local_delivery():
+def test_handle_data_processes_local_delivery():
     handler = _make_handler(local_domains=["example.com"])
     handler.send_to_telegram = AsyncMock(return_value=True)
     handler.bot.send_message = AsyncMock()
@@ -211,7 +206,7 @@ async def test_handle_data_processes_local_delivery():
         peer = ("127.0.0.1", 25000)
         host_name = "localhost"
 
-    response = await handler.handle_DATA(None, DummySession(), envelope)
+    response = asyncio.run(handler.handle_DATA(None, DummySession(), envelope))
     assert response.startswith("250")
     assert handler.stats.delivered_messages == 1
     assert handler.messages[-1]["is_local_delivery"] is True

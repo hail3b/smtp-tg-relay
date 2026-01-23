@@ -411,6 +411,9 @@ class CustomSMTPHandler:
         """Подготавливает медиафайлы для отправки, группируя их по типу"""
         # Группируем вложения по типу
         MEDIA_TYPES = {
+            'animation': {
+                'image/gif'
+            },
             'photo': {
                 'image/',
                 'application/png',
@@ -427,9 +430,6 @@ class CustomSMTPHandler:
                 'application/ogg',
                 'application/mp3',
                 'application/wav'
-            },
-            'animation': {
-                'image/gif'
             }
         }
 
