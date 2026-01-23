@@ -1,22 +1,71 @@
 # smtp-tg-relay
 
-This project forwards e-mails to Telegram chats using a bot. The recipient address encodes the Telegram chat ID and optional thread ID.
+Проект принимает письма по SMTP и пересылает их в Telegram-чаты через бота. 
+ID чата, ID топика (thread) и флаги поведения кодируются в локальной части адреса получателя. 
+Пересылка выполняется только для доменов, перечисленных в конфигурации локальных доменов. 
 
-## Recipient address format
+## Возможности
+
+- Поддержка текстовых и HTML писем (HTML дополнительно добавляется как вложение `message.html`).
+- Вложения группируются по типам (фото, видео, аудио, анимации, документы) и отправляются оптимальным способом.
+- Флаги в адресе позволяют отключать уведомления (silent).
+- Периодическая отправка статистики в админ-чат (по желанию).
+
+## Формат адреса получателя
 
 ```
-<chat_id>[!<thread_id>][.<flags>]@<local_domain>
+<chat_id>[!<thread_id>|_<thread_id>][.<flags>]@<local_domain>
 ```
 
-Example: `-1001234567890!55.s@example.com`
+Примеры:
 
-Available flags:
+- `-1001234567890@example.com`
+- `-1001234567890!55.s@example.com`
+- `id12345_678.s@example.com`
 
-- `s` – send the message in *silent* mode (without notification sound).
+Особенности:
 
-## Running tests
+- `chat_id` может начинаться с `id` (префикс будет отброшен).
+- `thread_id` может быть задан через `!` или `_`.
+- Флаги задаются через точку после идентификаторов.
 
-Install requirements and run `pytest`:
+Доступные флаги:
+
+- `s` или `silent` — отправка без звука уведомления.
+
+## Переменные окружения
+
+| Переменная | По умолчанию | Описание |
+| --- | --- | --- |
+| `SMTP_HOST` | `127.0.0.1` | Хост, на котором слушает SMTP-сервер. |
+| `SMTP_PORT` | `1025` | Порт SMTP-сервера. |
+| `SMTP_MAX_MESSAGE_SIZE` | `104857600` | Максимальный размер письма в байтах (100MB). |
+| `SMTP_MAX_STORED_MESSAGES` | `500` | Сколько сообщений хранить в памяти для логирования/отладки. |
+| `SMTP_LOCAL_DOMAINS` | `example.com` | Список доменов через запятую для локальной пересылки в Telegram. |
+| `TELEGRAM_BOT_TOKEN` | `TEST_TOKEN` | Токен Telegram-бота. |
+| `STATS_ADMIN_CHAT_ID` | — | Чат, куда отправлять статистику (если задан). |
+| `STATS_INTERVAL` | `3600` | Интервал отправки статистики в секундах. |
+
+## Быстрый запуск
+
+Установите зависимости и запустите сервер:
+
+```bash
+pip install -r requirements.txt
+python smtp_server.py
+```
+
+## Запуск в Docker
+
+```bash
+docker build -t smtp-tg-relay .
+docker run --rm -p 1025:1025 \
+  -e TELEGRAM_BOT_TOKEN=YOUR_TOKEN \
+  -e SMTP_LOCAL_DOMAINS=example.com \
+  smtp-tg-relay
+```
+
+## Запуск тестов
 
 ```bash
 pip install -r requirements.txt -r requirements-test.txt
