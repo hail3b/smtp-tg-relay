@@ -555,7 +555,38 @@ class CustomSMTPHandler:
                         silent
                     )
                 
-                # Если несколько файлов одного типа, отправляем их группой с текстом в первом файле
+                # Если несколько файлов одного типа, отправляем их группой (если поддерживается) с текстом в первом файле
+                if media_type in {"audio", "animation"}:
+                    first_file, *remaining_files = files
+                    if caption_text:
+                        first_sent = await self._send_media(
+                            chat_id,
+                            message_thread_id,
+                            media_type,
+                            first_file,
+                            caption_text,
+                            silent
+                        )
+                    else:
+                        first_sent = await self._send_media(
+                            chat_id,
+                            message_thread_id,
+                            media_type,
+                            first_file,
+                            None,
+                            silent
+                        )
+                    rest_sent = True
+                    if remaining_files:
+                        rest_sent = await self._send_files_individually(
+                            chat_id,
+                            message_thread_id,
+                            media_type,
+                            remaining_files,
+                            silent
+                        )
+                    return first_sent and rest_sent
+
                 return await self._send_media_group_with_text(
                     chat_id,
                     message_thread_id,
