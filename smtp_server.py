@@ -376,7 +376,7 @@ class CustomSMTPHandler:
         return any(addr.endswith(f"@{domain}") for domain in self.config.local_domains)
 
     def _get_local_recipient_name(self, email: str) -> Optional[LocalRecipient]:
-        """Извлекает и парсит имя локального получателя без домна"""
+        """Извлекает и парсит имя локального получателя без домена"""
         _, addr = parseaddr(email)
         for domain in self.config.local_domains:
             if addr.endswith(f"@{domain}"):
