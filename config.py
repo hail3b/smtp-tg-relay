@@ -2,7 +2,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import os
-from typing import List
+from typing import Dict, List
 
 # Server settings
 SMTP_HOST = os.getenv('SMTP_HOST', '127.0.0.1')
@@ -17,6 +17,24 @@ LOCAL_DOMAINS_STR = os.getenv('SMTP_LOCAL_DOMAINS', DEFAULT_DOMAINS)
 LOCAL_DOMAINS = [domain.strip() for domain in LOCAL_DOMAINS_STR.split(',') if domain.strip()]
 
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', 'TEST_TOKEN')
+SMTP_RECIPIENT_ALIASES_STR = os.getenv('SMTP_RECIPIENT_ALIASES', '')
+
+
+def _parse_recipient_aliases(raw_aliases: str) -> Dict[str, str]:
+    aliases: Dict[str, str] = {}
+    for item in raw_aliases.split(','):
+        item = item.strip()
+        if not item or '=' not in item:
+            continue
+        alias, canonical_local_part = item.split('=', 1)
+        alias = alias.strip()
+        canonical_local_part = canonical_local_part.strip()
+        if alias and canonical_local_part:
+            aliases[alias] = canonical_local_part
+    return aliases
+
+
+SMTP_RECIPIENT_ALIASES = _parse_recipient_aliases(SMTP_RECIPIENT_ALIASES_STR)
 
 # Statistics settings
 STATS_ADMIN_CHAT_ID = os.getenv('STATS_ADMIN_CHAT_ID')
@@ -25,3 +43,8 @@ STATS_INTERVAL = int(os.getenv('STATS_INTERVAL', '3600'))
 def get_local_domains() -> List[str]:
     """Получить список локальных доменов из переменных окружения"""
     return LOCAL_DOMAINS 
+
+
+def get_recipient_aliases() -> Dict[str, str]:
+    """Получить карту алиасов локальной части адреса"""
+    return SMTP_RECIPIENT_ALIASES
