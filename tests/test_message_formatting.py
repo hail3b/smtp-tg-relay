@@ -1,19 +1,14 @@
 import asyncio
-import html
 import sys
 from pathlib import Path
-from unittest.mock import AsyncMock, call
+from unittest.mock import AsyncMock
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from smtp_server import CustomSMTPHandler, ServerConfig
 
 
-def _chunk_text(text: str, max_length: int = 4096) -> list[str]:
-    return [text[i:i + max_length] for i in range(0, len(text), max_length)]
-
-
-def test_long_html_is_sanitized_and_chunked():
+def test_long_html_is_sanitized_truncated_and_sent_with_html_file():
     handler = CustomSMTPHandler(ServerConfig())
     handler.bot = AsyncMock()
 
@@ -29,20 +24,16 @@ def test_long_html_is_sanitized_and_chunked():
     result = asyncio.run(handler.send_to_telegram("123", None, message_dict))
 
     assert result is True
-    expected_text = f"{html.escape(subject)}\n{html.escape(html_body)}"
-    chunks = _chunk_text(expected_text)
-    assert handler.bot.send_message.await_count == len(chunks)
-    expected_calls = [
-        call(
-            chat_id="123",
-            text=chunk,
-            parse_mode="HTML",
-            disable_notification=False,
-            message_thread_id=None
-        )
-        for chunk in chunks
-    ]
-    handler.bot.send_message.assert_has_awaits(expected_calls)
+    handler.bot.send_document.assert_awaited_once()
+    assert handler.bot.send_document.await_args.kwargs["document"].name == "message.html"
+
+    handler.bot.send_message.assert_awaited_once()
+    text = handler.bot.send_message.await_args.kwargs["text"]
+    assert "<" not in text
+    assert ">" not in text
+    assert len(text) == 4096
+    assert text.endswith("...")
+    assert handler.bot.send_message.await_args.kwargs["parse_mode"] is None
 
 
 def test_long_text_with_attachments_sends_caption_and_full_text():
@@ -71,7 +62,7 @@ def test_long_text_with_attachments_sends_caption_and_full_text():
     result = asyncio.run(handler.send_to_telegram("456", None, message_dict))
 
     assert result is True
-    expected_text = f"{html.escape(message_dict['subject'])}\n{html.escape(long_body)}"
+    expected_text = f"{message_dict['subject']}\n{long_body}"
     handler.bot.send_message.assert_awaited_once()
     sent_text = handler.bot.send_message.await_args.kwargs["text"]
     assert sent_text == expected_text
@@ -110,4 +101,5 @@ def test_html_only_message_sends_plain_text_once_and_html_attachment_without_cap
     assert result is True
     handler.bot.send_message.assert_awaited_once()
     handler.bot.send_document.assert_awaited_once()
+    assert handler.bot.send_document.await_args_list[0].kwargs["document"].name == "message.html"
     assert handler.bot.send_document.await_args.kwargs["caption"] is None
