@@ -121,6 +121,7 @@ def test_extract_message_content_with_html_and_attachment():
     parsed = handler.extract_message_content(message)
     assert parsed["text_body"] == "Plain text"
     assert parsed["html_body"] is not None
+    assert parsed["plain_from_html"] == "HTML"
     assert any(att["filename"] == "file.bin" for att in parsed["attachments"])
     assert any(att["filename"] == "message.html" for att in parsed["attachments"])
 
