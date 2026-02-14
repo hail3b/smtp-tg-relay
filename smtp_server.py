@@ -24,7 +24,7 @@ from config import (
 )
 
 from telegram import Bot, InputMediaPhoto, InputMediaVideo, InputMediaDocument, InputMediaAudio, InputMediaAnimation
-from telegram.error import TelegramError
+from telegram.error import TelegramError, RetryAfter
 import html
 import mimetypes
 from io import BytesIO
@@ -212,6 +212,9 @@ class CustomSMTPHandler:
         self.stats_admin_chat_id = STATS_ADMIN_CHAT_ID
         self.stats_interval = STATS_INTERVAL
         self._stats_task: Optional[asyncio.Task] = None
+        self._telegram_retry_attempts = 3
+        self._telegram_retry_base_delay = 1.0
+        self._telegram_retry_max_delay = 10.0
 
     def start_stats(self) -> None:
         """Start periodic statistics reporting"""
@@ -240,6 +243,30 @@ class CustomSMTPHandler:
             self.logger.error(f"Failed to send stats: {e}")
         finally:
             self.stats.reset()
+
+    async def _execute_with_retry(self, action, description: str) -> None:
+        """Выполняет действие с повторами для Telegram API."""
+        delay = self._telegram_retry_base_delay
+        for attempt in range(1, self._telegram_retry_attempts + 1):
+            try:
+                await action()
+                return
+            except RetryAfter as e:
+                retry_after = float(getattr(e, "retry_after", delay))
+                self.logger.warning(
+                    f"Telegram rate limit during {description}; retrying in {retry_after:.1f}s "
+                    f"(attempt {attempt}/{self._telegram_retry_attempts})"
+                )
+                await asyncio.sleep(retry_after)
+            except TelegramError as e:
+                if attempt >= self._telegram_retry_attempts:
+                    raise
+                self.logger.warning(
+                    f"Telegram error during {description}: {e}. Retrying in {delay:.1f}s "
+                    f"(attempt {attempt}/{self._telegram_retry_attempts})"
+                )
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, self._telegram_retry_max_delay)
 
     async def validate_envelope(self, envelope: Envelope) -> Tuple[bool, str]:
         if len(envelope.content) > self.config.max_message_size:
@@ -579,12 +606,15 @@ class CustomSMTPHandler:
                                   text: str, silent: bool = False) -> None:
         """Отправляет текст, разбивая его на части по лимиту Telegram"""
         for chunk in self._split_text(text):
-            await self.bot.send_message(
-                chat_id=chat_id,
-                text=chunk,
-                parse_mode='HTML',
-                disable_notification=silent,
-                message_thread_id=message_thread_id if message_thread_id else None
+            await self._execute_with_retry(
+                lambda: self.bot.send_message(
+                    chat_id=chat_id,
+                    text=chunk,
+                    parse_mode='HTML',
+                    disable_notification=silent,
+                    message_thread_id=message_thread_id if message_thread_id else None
+                ),
+                "send_message"
             )
 
     async def send_to_telegram(self, chat_id: str, message_thread_id: Optional[str], message_dict: Dict, silent: bool = False) -> bool:
@@ -694,12 +724,15 @@ class CustomSMTPHandler:
 
             # Если файлы разных типов, отправляем текст и группы файлов отдельно
             if not needs_full_text_message and text:
-                await self.bot.send_message(
-                    chat_id=chat_id,
-                    text=text,
-                    parse_mode='HTML',
-                    disable_notification=silent,
-                    message_thread_id=message_thread_id if message_thread_id else None
+                await self._execute_with_retry(
+                    lambda: self.bot.send_message(
+                        chat_id=chat_id,
+                        text=text,
+                        parse_mode='HTML',
+                        disable_notification=silent,
+                        message_thread_id=message_thread_id if message_thread_id else None
+                    ),
+                    "send_message"
                 )
             
             # Отправляем каждую группу файлов
@@ -735,49 +768,64 @@ class CustomSMTPHandler:
             file['file'].seek(0)
             
             if media_type == 'photo':
-                await self.bot.send_photo(
-                    chat_id=chat_id,
-                    photo=file['file'],
-                    caption=text,
-                    parse_mode='HTML' if text else None,
-                    disable_notification=silent,
-                    message_thread_id=message_thread_id if message_thread_id else None
+                await self._execute_with_retry(
+                    lambda: self.bot.send_photo(
+                        chat_id=chat_id,
+                        photo=file['file'],
+                        caption=text,
+                        parse_mode='HTML' if text else None,
+                        disable_notification=silent,
+                        message_thread_id=message_thread_id if message_thread_id else None
+                    ),
+                    "send_photo"
                 )
             elif media_type == 'video':
-                await self.bot.send_video(
-                    chat_id=chat_id,
-                    video=file['file'],
-                    caption=text,
-                    parse_mode='HTML' if text else None,
-                    disable_notification=silent,
-                    message_thread_id=message_thread_id if message_thread_id else None
+                await self._execute_with_retry(
+                    lambda: self.bot.send_video(
+                        chat_id=chat_id,
+                        video=file['file'],
+                        caption=text,
+                        parse_mode='HTML' if text else None,
+                        disable_notification=silent,
+                        message_thread_id=message_thread_id if message_thread_id else None
+                    ),
+                    "send_video"
                 )
             elif media_type == 'audio':
-                await self.bot.send_audio(
-                    chat_id=chat_id,
-                    audio=file['file'],
-                    caption=text,
-                    parse_mode='HTML' if text else None,
-                    disable_notification=silent,
-                    message_thread_id=message_thread_id if message_thread_id else None
+                await self._execute_with_retry(
+                    lambda: self.bot.send_audio(
+                        chat_id=chat_id,
+                        audio=file['file'],
+                        caption=text,
+                        parse_mode='HTML' if text else None,
+                        disable_notification=silent,
+                        message_thread_id=message_thread_id if message_thread_id else None
+                    ),
+                    "send_audio"
                 )
             elif media_type == 'animation':
-                await self.bot.send_animation(
-                    chat_id=chat_id,
-                    animation=file['file'],
-                    caption=text,
-                    parse_mode='HTML' if text else None,
-                    disable_notification=silent,
-                    message_thread_id=message_thread_id if message_thread_id else None
+                await self._execute_with_retry(
+                    lambda: self.bot.send_animation(
+                        chat_id=chat_id,
+                        animation=file['file'],
+                        caption=text,
+                        parse_mode='HTML' if text else None,
+                        disable_notification=silent,
+                        message_thread_id=message_thread_id if message_thread_id else None
+                    ),
+                    "send_animation"
                 )
             else:  # document
-                await self.bot.send_document(
-                    chat_id=chat_id,
-                    document=file['file'],
-                    caption=text,
-                    parse_mode='HTML' if text else None,
-                    disable_notification=silent,
-                    message_thread_id=message_thread_id if message_thread_id else None
+                await self._execute_with_retry(
+                    lambda: self.bot.send_document(
+                        chat_id=chat_id,
+                        document=file['file'],
+                        caption=text,
+                        parse_mode='HTML' if text else None,
+                        disable_notification=silent,
+                        message_thread_id=message_thread_id if message_thread_id else None
+                    ),
+                    "send_document"
                 )
             return True
         except Exception as e:
@@ -832,31 +880,40 @@ class CustomSMTPHandler:
                 ])
             else:
                 # Для других типов отправляем текст отдельно
-                await self.bot.send_message(
-                    chat_id=chat_id,
-                    text=text,
-                    parse_mode='HTML',
-                    disable_notification=silent,
-                    message_thread_id=message_thread_id if message_thread_id else None
+                await self._execute_with_retry(
+                    lambda: self.bot.send_message(
+                        chat_id=chat_id,
+                        text=text,
+                        parse_mode='HTML',
+                        disable_notification=silent,
+                        message_thread_id=message_thread_id if message_thread_id else None
+                    ),
+                    "send_message"
                 )
                 return await self._send_media_group(chat_id, message_thread_id, media_type, files, silent)
 
-            await self.bot.send_media_group(
-                chat_id=chat_id,
-                media=media_group,
-                disable_notification=silent,
-                message_thread_id=message_thread_id if message_thread_id else None
+            await self._execute_with_retry(
+                lambda: self.bot.send_media_group(
+                    chat_id=chat_id,
+                    media=media_group,
+                    disable_notification=silent,
+                    message_thread_id=message_thread_id if message_thread_id else None
+                ),
+                "send_media_group"
             )
             return True
         except Exception as e:
             self.logger.error(f"Failed to send media group: {str(e)}")
             # Если не удалось отправить группой, отправляем текст и файлы по отдельности
-            await self.bot.send_message(
-                chat_id=chat_id,
-                text=text,
-                parse_mode='HTML',
-                disable_notification=silent,
-                message_thread_id=message_thread_id if message_thread_id else None
+            await self._execute_with_retry(
+                lambda: self.bot.send_message(
+                    chat_id=chat_id,
+                    text=text,
+                    parse_mode='HTML',
+                    disable_notification=silent,
+                    message_thread_id=message_thread_id if message_thread_id else None
+                ),
+                "send_message"
             )
             return await self._send_files_individually(chat_id, message_thread_id, media_type, files, silent)
 
@@ -873,11 +930,14 @@ class CustomSMTPHandler:
             else:
                 return False
 
-            await self.bot.send_media_group(
-                chat_id=chat_id,
-                media=media_group,
-                disable_notification=silent,
-                message_thread_id=message_thread_id if message_thread_id else None
+            await self._execute_with_retry(
+                lambda: self.bot.send_media_group(
+                    chat_id=chat_id,
+                    media=media_group,
+                    disable_notification=silent,
+                    message_thread_id=message_thread_id if message_thread_id else None
+                ),
+                "send_media_group"
             )
             return True
         except Exception as e:
