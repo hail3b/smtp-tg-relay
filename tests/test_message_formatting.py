@@ -22,6 +22,7 @@ def test_long_html_is_sanitized_and_chunked():
     message_dict = {
         "subject": subject,
         "text_body": None,
+        "plain_from_html": "сообщение" * 800,
         "html_body": html_body,
         "attachments": []
     }
@@ -29,7 +30,7 @@ def test_long_html_is_sanitized_and_chunked():
     result = asyncio.run(handler.send_to_telegram("123", None, message_dict))
 
     assert result is True
-    expected_text = f"{html.escape(subject)}\n{html.escape(html_body)}"
+    expected_text = f"{html.escape(subject)}\n{html.escape(message_dict['plain_from_html'])}"
     chunks = _chunk_text(expected_text)
     assert handler.bot.send_message.await_count == len(chunks)
     expected_calls = [
@@ -43,6 +44,27 @@ def test_long_html_is_sanitized_and_chunked():
         for chunk in chunks
     ]
     handler.bot.send_message.assert_has_awaits(expected_calls)
+
+
+def test_html_like_text_body_is_converted_to_plain_text():
+    handler = CustomSMTPHandler(ServerConfig())
+    handler.bot = AsyncMock()
+
+    message_dict = {
+        "subject": "Fwd: aaaa",
+        "text_body": "<div><div>aaaa</div></div><div>--</div><div><a href='mailto:test@example.com'>test@example.com</a></div>",
+        "plain_from_html": None,
+        "html_body": None,
+        "attachments": []
+    }
+
+    result = asyncio.run(handler.send_to_telegram("123", None, message_dict))
+
+    assert result is True
+    handler.bot.send_message.assert_awaited_once()
+    sent_text = handler.bot.send_message.await_args.kwargs["text"]
+    assert "<div>" not in sent_text
+    assert "test@example.com" in sent_text
 
 
 def test_long_text_with_attachments_sends_caption_and_full_text():
@@ -79,3 +101,35 @@ def test_long_text_with_attachments_sends_caption_and_full_text():
     caption = handler.bot.send_document.await_args.kwargs["caption"]
     assert caption is not None
     assert len(caption) <= 1024
+
+
+def test_html_only_message_sends_plain_text_once_and_html_attachment_without_caption():
+    handler = CustomSMTPHandler(ServerConfig())
+    handler.bot = AsyncMock()
+
+    message_dict = {
+        "subject": "Тема",
+        "text_body": None,
+        "plain_from_html": "aaaa\naaa\nС уважением",
+        "html_body": "<div>aaaa</div><div>aaa</div>",
+        "attachments": [
+            {
+                "filename": "message.html",
+                "content_type": "text/html",
+                "content": b"<html><body>aaaa</body></html>",
+                "content_disposition": "attachment",
+                "content_id": "",
+                "size": 30,
+                "encoding": "utf-8",
+                "charset": "utf-8",
+                "generated_html": True,
+            }
+        ]
+    }
+
+    result = asyncio.run(handler.send_to_telegram("789", None, message_dict))
+
+    assert result is True
+    handler.bot.send_message.assert_awaited_once()
+    handler.bot.send_document.assert_awaited_once()
+    assert handler.bot.send_document.await_args.kwargs["caption"] is None

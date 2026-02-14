@@ -121,8 +121,22 @@ def test_extract_message_content_with_html_and_attachment():
     parsed = handler.extract_message_content(message)
     assert parsed["text_body"] == "Plain text"
     assert parsed["html_body"] is not None
+    assert parsed["plain_from_html"] == "HTML"
     assert any(att["filename"] == "file.bin" for att in parsed["attachments"])
     assert any(att["filename"] == "message.html" for att in parsed["attachments"])
+
+
+def test_extract_message_content_plain_part_with_html_tags_is_normalized():
+    handler = _make_handler()
+    message = EmailMessage()
+    message["From"] = "from@example.com"
+    message["To"] = "to@example.com"
+    message["Subject"] = "Forward"
+    message.set_content("<div>aaaa</div><div>bbb</div>")
+
+    parsed = handler.extract_message_content(message)
+
+    assert parsed["text_body"] == "aaaa\nbbb"
 
 
 def test_process_attachment_assigns_filename():
