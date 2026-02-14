@@ -192,6 +192,29 @@ def test_send_to_telegram_multiple_photos_uses_media_group():
     handler.bot.send_message.assert_not_awaited()
 
 
+def test_get_local_recipient_name_without_alias():
+    handler = _make_handler(local_domains=["example.com"])
+
+    recipient = handler._get_local_recipient_name("id123@example.com")
+
+    assert recipient is not None
+    assert recipient.chat_id == "123"
+    assert recipient.message_thread_id is None
+    assert recipient.silent is False
+
+
+def test_get_local_recipient_name_with_alias_and_flags():
+    handler = _make_handler(local_domains=["example.com"])
+    handler.config.recipient_aliases = {"admin": "-1001234567890!55"}
+
+    recipient = handler._get_local_recipient_name("admin.s@example.com")
+
+    assert recipient is not None
+    assert recipient.chat_id == "-1001234567890"
+    assert recipient.message_thread_id == "55"
+    assert recipient.silent is True
+
+
 def test_handle_data_processes_local_delivery():
     handler = _make_handler(local_domains=["example.com"])
     handler.send_to_telegram = AsyncMock(return_value=True)

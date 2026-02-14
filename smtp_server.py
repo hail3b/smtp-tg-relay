@@ -17,6 +17,7 @@ from config import (
     MAX_MESSAGE_SIZE,
     MAX_STORED_MESSAGES,
     get_local_domains,
+    get_recipient_aliases,
     TELEGRAM_BOT_TOKEN,
     STATS_ADMIN_CHAT_ID,
     STATS_INTERVAL
@@ -38,6 +39,7 @@ class ServerConfig:
     max_message_size: int = MAX_MESSAGE_SIZE
     max_stored_messages: int = MAX_STORED_MESSAGES
     local_domains: List[str] = None
+    recipient_aliases: Dict[str, str] = None
     
     def __post_init__(self):
         if self.max_message_size <= 0:
@@ -50,6 +52,8 @@ class ServerConfig:
         # Проверяем, что список доменов не пустой
         if not self.local_domains:
             raise ValueError("local_domains cannot be empty")
+        if self.recipient_aliases is None:
+            self.recipient_aliases = get_recipient_aliases()
         print(f'hostname: {self.hostname}')
 
 class EmailValidator:
@@ -381,8 +385,22 @@ class CustomSMTPHandler:
         for domain in self.config.local_domains:
             if addr.endswith(f"@{domain}"):
                 local_name = addr.split(f"@{domain}")[0]
-                return LocalRecipient.parse(local_name)
+                return self._resolve_local_recipient(local_name)
         return None
+
+    def _resolve_local_recipient(self, local_name: str) -> Optional[LocalRecipient]:
+        """Разрешает алиас локальной части адреса и парсит получателя."""
+        if not local_name:
+            return None
+
+        raw_local_name = local_name
+        flag_suffix = ''
+        if '.' in raw_local_name:
+            raw_local_name, flag_part = raw_local_name.split('.', 1)
+            flag_suffix = f'.{flag_part}'
+
+        canonical_local_name = self.config.recipient_aliases.get(raw_local_name, raw_local_name)
+        return LocalRecipient.parse(f'{canonical_local_name}{flag_suffix}')
 
     def _handle_local_delivery(self, message_dict: Dict) -> None:
         """Обработка сообщений для локальных получателей"""
