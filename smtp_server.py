@@ -30,6 +30,7 @@ import mimetypes
 from io import BytesIO
 from pathlib import Path
 import chardet
+from html.parser import HTMLParser
 
 @dataclass
 class ServerConfig:
@@ -104,6 +105,51 @@ class LocalRecipient:
             return cls(chat_id=chat_id, message_thread_id=message_thread_id, silent=('s' in flags or 'silent' in flags))
 
         return None
+
+
+class _HTMLToTextParser(HTMLParser):
+    """Конвертирует HTML в человекочитаемый plain text"""
+
+    BLOCK_TAGS = {"p", "div", "br", "li", "tr", "table", "section"}
+
+    def __init__(self):
+        super().__init__()
+        self.parts: List[str] = []
+        self.current_link: Optional[Dict[str, str]] = None
+
+    def _append_break(self):
+        if not self.parts or self.parts[-1] != "\n":
+            self.parts.append("\n")
+
+    def handle_starttag(self, tag, attrs):
+        if tag in self.BLOCK_TAGS:
+            self._append_break()
+        if tag == "a":
+            href = dict(attrs).get("href", "")
+            self.current_link = {"href": href, "text": ""}
+
+    def handle_endtag(self, tag):
+        if tag in self.BLOCK_TAGS:
+            self._append_break()
+        if tag == "a" and self.current_link:
+            href = self.current_link.get("href", "").strip()
+            text = self.current_link.get("text", "").strip()
+            if href and href not in text:
+                self.parts.append(f" ({href})")
+            self.current_link = None
+
+    def handle_data(self, data):
+        if not data:
+            return
+        self.parts.append(data)
+        if self.current_link:
+            self.current_link["text"] += data
+
+    def get_text(self) -> str:
+        raw = "".join(self.parts)
+        lines = [line.strip() for line in raw.splitlines()]
+        compact = "\n".join(line for line in lines if line)
+        return html.unescape(compact)
 
 
 @dataclass
@@ -230,6 +276,9 @@ class CustomSMTPHandler:
         
         # Сохраняем «чистый» HTML
         parsed_email["html_body"] = html_content
+        parser = _HTMLToTextParser()
+        parser.feed(html_content)
+        parsed_email["plain_from_html"] = parser.get_text()
 
         # При необходимости перекодируем в UTF-8 (если хотим сохранить/передать именно в UTF-8)
         html_as_utf8 = html_content.encode('utf-8')
@@ -258,7 +307,8 @@ class CustomSMTPHandler:
             "content_id": "",
             "size": len(html_as_utf8),
             "encoding": "utf-8",
-            "charset": "utf-8"
+            "charset": "utf-8",
+            "generated_html": True,
         }
         parsed_email["attachments"].append(attachment_info)
         
@@ -276,6 +326,7 @@ class CustomSMTPHandler:
             "date": email_message.get("date", datetime.now().isoformat()),
             "text_body": None,
             "html_body": None,
+            "plain_from_html": None,
             "attachments": [],
             "X-Client-IP": None,
             "X-Host-Name": None
@@ -540,22 +591,49 @@ class CustomSMTPHandler:
         """Отправляет сообщение в Telegram"""
         try:
             # Формируем текст сообщения
-            body = message_dict.get('text_body') or message_dict.get('html_body')
+            body = (
+                message_dict.get('text_body')
+                or message_dict.get('plain_from_html')
+                or message_dict.get('html_body')
+            )
             text = self._build_message_text(message_dict.get('subject'), body)
             needs_full_text_message = len(text) > 1024
             caption_text = self._truncate_text(text) if needs_full_text_message else text
             caption_text = caption_text or None
+
+            attachments = message_dict.get('attachments', [])
+            generated_html_attachments = [att for att in attachments if att.get('generated_html')]
+            regular_attachments = [att for att in attachments if not att.get('generated_html')]
             
             # Если нет вложений, отправляем только текст
-            if not message_dict['attachments']:
+            if not attachments:
                 await self._send_text_messages(chat_id, message_thread_id, text, silent)
+                return True
+
+            if not regular_attachments:
+                if text:
+                    await self._send_text_messages(chat_id, message_thread_id, text, silent)
+                for attachment in generated_html_attachments:
+                    document = BytesIO(attachment['content'])
+                    document.name = attachment['filename']
+                    try:
+                        await self.bot.send_document(
+                            chat_id=chat_id,
+                            document=document,
+                            caption=None,
+                            parse_mode=None,
+                            disable_notification=silent,
+                            message_thread_id=message_thread_id if message_thread_id else None
+                        )
+                    finally:
+                        document.close()
                 return True
 
             if needs_full_text_message and text:
                 await self._send_text_messages(chat_id, message_thread_id, text, silent)
 
             # Группируем вложения по типу
-            media_files = await self._prepare_media_files(message_dict['attachments'])
+            media_files = await self._prepare_media_files(regular_attachments)
             
             # Проверяем, все ли файлы одного типа
             non_empty_types = [(type_name, files) for type_name, files in media_files.items() if files]
@@ -628,6 +706,21 @@ class CustomSMTPHandler:
             for media_type, files in media_files.items():
                 if files:
                     await self._send_media_group(chat_id, message_thread_id, media_type, files, silent)
+
+            for attachment in generated_html_attachments:
+                document = BytesIO(attachment['content'])
+                document.name = attachment['filename']
+                try:
+                    await self.bot.send_document(
+                        chat_id=chat_id,
+                        document=document,
+                        caption=None,
+                        parse_mode=None,
+                        disable_notification=silent,
+                        message_thread_id=message_thread_id if message_thread_id else None
+                    )
+                finally:
+                    document.close()
 
             return True
 

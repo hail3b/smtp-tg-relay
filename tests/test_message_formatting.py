@@ -79,3 +79,35 @@ def test_long_text_with_attachments_sends_caption_and_full_text():
     caption = handler.bot.send_document.await_args.kwargs["caption"]
     assert caption is not None
     assert len(caption) <= 1024
+
+
+def test_html_only_message_sends_plain_text_once_and_html_attachment_without_caption():
+    handler = CustomSMTPHandler(ServerConfig())
+    handler.bot = AsyncMock()
+
+    message_dict = {
+        "subject": "Тема",
+        "text_body": None,
+        "plain_from_html": "aaaa\naaa\nС уважением",
+        "html_body": "<div>aaaa</div><div>aaa</div>",
+        "attachments": [
+            {
+                "filename": "message.html",
+                "content_type": "text/html",
+                "content": b"<html><body>aaaa</body></html>",
+                "content_disposition": "attachment",
+                "content_id": "",
+                "size": 30,
+                "encoding": "utf-8",
+                "charset": "utf-8",
+                "generated_html": True,
+            }
+        ]
+    }
+
+    result = asyncio.run(handler.send_to_telegram("789", None, message_dict))
+
+    assert result is True
+    handler.bot.send_message.assert_awaited_once()
+    handler.bot.send_document.assert_awaited_once()
+    assert handler.bot.send_document.await_args.kwargs["caption"] is None
