@@ -152,6 +152,12 @@ class _HTMLToTextParser(HTMLParser):
         return html.unescape(compact)
 
 
+def _contains_html_tags(text: Optional[str]) -> bool:
+    if not text:
+        return False
+    return bool(re.search(r"<[^>]+>", text))
+
+
 @dataclass
 class Stats:
     """Statistics for processed messages"""
@@ -548,10 +554,13 @@ class CustomSMTPHandler:
         return media_files
 
     def _sanitize_text(self, text: Optional[str]) -> str:
-        """Санитайзит текст для безопасной отправки в HTML"""
+        """Преобразует текст в plain text без HTML-тегов"""
         if not text:
             return ""
-        return html.escape(text)
+        parser = _HTMLToTextParser()
+        parser.feed(text)
+        parser.close()
+        return parser.get_text()
 
     def _truncate_text(self, text: Optional[str], max_length: int = 1024) -> str:
         """Обрезает текст до максимальной длины с добавлением многоточия"""
@@ -562,10 +571,10 @@ class CustomSMTPHandler:
         return text
 
     def _split_text(self, text: str, max_length: int = 4096) -> List[str]:
-        """Разбивает текст на части по максимальной длине"""
+        """Возвращает не более одного сообщения: длинный текст обрезается"""
         if not text:
             return []
-        return [text[i:i + max_length] for i in range(0, len(text), max_length)]
+        return [self._truncate_text(text, max_length=max_length)]
 
     def _build_message_text(self, subject: Optional[str], body: Optional[str]) -> str:
         """Формирует и санитайзит итоговый текст сообщения"""
@@ -582,7 +591,7 @@ class CustomSMTPHandler:
             await self.bot.send_message(
                 chat_id=chat_id,
                 text=chunk,
-                parse_mode='HTML',
+                parse_mode=None,
                 disable_notification=silent,
                 message_thread_id=message_thread_id if message_thread_id else None
             )
@@ -596,6 +605,26 @@ class CustomSMTPHandler:
                 or message_dict.get('plain_from_html')
                 or message_dict.get('html_body')
             )
+
+            if _contains_html_tags(body):
+                html_source = message_dict.get('html_body') or body
+                html_bytes = html_source.encode('utf-8', errors='replace')
+                has_generated_html = any(
+                    att.get('generated_html') for att in message_dict.get('attachments', [])
+                )
+                if html_source and not has_generated_html:
+                    message_dict.setdefault('attachments', []).append({
+                        "filename": "message.html",
+                        "content_type": "text/html",
+                        "content": html_bytes,
+                        "content_disposition": "attachment",
+                        "content_id": "",
+                        "size": len(html_bytes),
+                        "encoding": "utf-8",
+                        "charset": "utf-8",
+                        "generated_html": True,
+                    })
+
             text = self._build_message_text(message_dict.get('subject'), body)
             needs_full_text_message = len(text) > 1024
             caption_text = self._truncate_text(text) if needs_full_text_message else text
@@ -611,8 +640,6 @@ class CustomSMTPHandler:
                 return True
 
             if not regular_attachments:
-                if text:
-                    await self._send_text_messages(chat_id, message_thread_id, text, silent)
                 for attachment in generated_html_attachments:
                     document = BytesIO(attachment['content'])
                     document.name = attachment['filename']
@@ -627,7 +654,26 @@ class CustomSMTPHandler:
                         )
                     finally:
                         document.close()
+                if text:
+                    await self._send_text_messages(chat_id, message_thread_id, text, silent)
                 return True
+
+            if generated_html_attachments:
+                first_html_attachment = generated_html_attachments[0]
+                document = BytesIO(first_html_attachment['content'])
+                document.name = first_html_attachment['filename']
+                try:
+                    await self.bot.send_document(
+                        chat_id=chat_id,
+                        document=document,
+                        caption=None,
+                        parse_mode=None,
+                        disable_notification=silent,
+                        message_thread_id=message_thread_id if message_thread_id else None
+                    )
+                finally:
+                    document.close()
+                generated_html_attachments = generated_html_attachments[1:]
 
             if needs_full_text_message and text:
                 await self._send_text_messages(chat_id, message_thread_id, text, silent)
@@ -697,7 +743,7 @@ class CustomSMTPHandler:
                 await self.bot.send_message(
                     chat_id=chat_id,
                     text=text,
-                    parse_mode='HTML',
+                    parse_mode=None,
                     disable_notification=silent,
                     message_thread_id=message_thread_id if message_thread_id else None
                 )
@@ -739,7 +785,7 @@ class CustomSMTPHandler:
                     chat_id=chat_id,
                     photo=file['file'],
                     caption=text,
-                    parse_mode='HTML' if text else None,
+                    parse_mode=None,
                     disable_notification=silent,
                     message_thread_id=message_thread_id if message_thread_id else None
                 )
@@ -748,7 +794,7 @@ class CustomSMTPHandler:
                     chat_id=chat_id,
                     video=file['file'],
                     caption=text,
-                    parse_mode='HTML' if text else None,
+                    parse_mode=None,
                     disable_notification=silent,
                     message_thread_id=message_thread_id if message_thread_id else None
                 )
@@ -757,7 +803,7 @@ class CustomSMTPHandler:
                     chat_id=chat_id,
                     audio=file['file'],
                     caption=text,
-                    parse_mode='HTML' if text else None,
+                    parse_mode=None,
                     disable_notification=silent,
                     message_thread_id=message_thread_id if message_thread_id else None
                 )
@@ -766,7 +812,7 @@ class CustomSMTPHandler:
                     chat_id=chat_id,
                     animation=file['file'],
                     caption=text,
-                    parse_mode='HTML' if text else None,
+                    parse_mode=None,
                     disable_notification=silent,
                     message_thread_id=message_thread_id if message_thread_id else None
                 )
@@ -775,7 +821,7 @@ class CustomSMTPHandler:
                     chat_id=chat_id,
                     document=file['file'],
                     caption=text,
-                    parse_mode='HTML' if text else None,
+                    parse_mode=None,
                     disable_notification=silent,
                     message_thread_id=message_thread_id if message_thread_id else None
                 )
@@ -796,7 +842,7 @@ class CustomSMTPHandler:
                     InputMediaPhoto(
                         media=files[0]['file'],
                         caption=text,
-                        parse_mode='HTML'
+                        parse_mode=None
                     )
                 ]
                 media_group.extend([
@@ -809,7 +855,7 @@ class CustomSMTPHandler:
                     InputMediaVideo(
                         media=files[0]['file'],
                         caption=text,
-                        parse_mode='HTML'
+                        parse_mode=None
                     )
                 ]
                 media_group.extend([
@@ -822,7 +868,7 @@ class CustomSMTPHandler:
                     InputMediaDocument(
                         media=files[0]['file'],
                         caption=text,
-                        parse_mode='HTML'
+                        parse_mode=None
                     )
                 ]
                 media_group.extend([
@@ -835,7 +881,7 @@ class CustomSMTPHandler:
                 await self.bot.send_message(
                     chat_id=chat_id,
                     text=text,
-                    parse_mode='HTML',
+                    parse_mode=None,
                     disable_notification=silent,
                     message_thread_id=message_thread_id if message_thread_id else None
                 )
@@ -854,7 +900,7 @@ class CustomSMTPHandler:
             await self.bot.send_message(
                 chat_id=chat_id,
                 text=text,
-                parse_mode='HTML',
+                parse_mode=None,
                 disable_notification=silent,
                 message_thread_id=message_thread_id if message_thread_id else None
             )

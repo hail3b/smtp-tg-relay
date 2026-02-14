@@ -73,11 +73,11 @@ def test_stats_reporting_and_reset():
 
 def test_text_helpers():
     handler = _make_handler()
-    assert handler._sanitize_text("<b>") == "&lt;b&gt;"
+    assert handler._sanitize_text("<b>Hello</b>") == "Hello"
     assert handler._truncate_text("A" * 10, max_length=8) == "AAAAA..."
     assert handler._truncate_text(None) == ""
     assert handler._split_text("") == []
-    assert handler._split_text("ABC", max_length=2) == ["AB", "C"]
+    assert handler._split_text("ABC", max_length=4) == ["ABC"]
     assert handler._build_message_text("Subject", "Body") == "Subject\nBody"
     assert handler._build_message_text("Only", None) == "Only"
     assert handler._build_message_text(None, "Body") == "Body"
@@ -157,7 +157,7 @@ def test_prepare_media_files_grouping():
     assert len(grouped["document"]) == 1
 
 
-def test_send_to_telegram_splits_long_text():
+def test_send_to_telegram_truncates_long_text_to_single_message():
     handler = _make_handler()
     handler.bot.send_message = AsyncMock()
     message_dict = {
@@ -169,8 +169,10 @@ def test_send_to_telegram_splits_long_text():
 
     result = asyncio.run(handler.send_to_telegram("123", None, message_dict))
     assert result is True
-    expected_text = handler._build_message_text("Subject", message_dict["text_body"])
-    assert handler.bot.send_message.await_count == len(handler._split_text(expected_text))
+    handler.bot.send_message.assert_awaited_once()
+    sent_text = handler.bot.send_message.await_args.kwargs["text"]
+    assert len(sent_text) == 4096
+    assert sent_text.endswith("...")
 
 
 def test_send_to_telegram_multiple_photos_uses_media_group():
@@ -190,6 +192,25 @@ def test_send_to_telegram_multiple_photos_uses_media_group():
     result = asyncio.run(handler.send_to_telegram("123", None, message_dict))
     assert result is True
     handler.bot.send_media_group.assert_awaited_once()
+    handler.bot.send_message.assert_not_awaited()
+
+
+def test_send_to_telegram_html_text_sends_html_attachment_first():
+    handler = _make_handler()
+    handler.bot.send_message = AsyncMock()
+    handler.bot.send_document = AsyncMock()
+
+    message_dict = {
+        "subject": "Subj",
+        "text_body": "<div>Hello</div>",
+        "html_body": None,
+        "attachments": [{"filename": "a.png", "content_type": "image/png", "content": b"1"}],
+    }
+
+    result = asyncio.run(handler.send_to_telegram("123", None, message_dict))
+    assert result is True
+    handler.bot.send_document.assert_awaited()
+    assert handler.bot.send_document.await_args_list[0].kwargs["document"].name == "message.html"
     handler.bot.send_message.assert_not_awaited()
 
 
