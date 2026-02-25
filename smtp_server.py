@@ -110,18 +110,27 @@ class LocalRecipient:
 class _HTMLToTextParser(HTMLParser):
     """Конвертирует HTML в человекочитаемый plain text"""
 
-    BLOCK_TAGS = {"p", "div", "br", "li", "tr", "table", "section"}
+    BLOCK_TAGS = {"p", "div", "br", "li", "tr", "table", "section", "h1", "h2", "h3", "h4", "h5", "h6"}
+    SKIP_CONTENT_TAGS = {"style", "script", "head", "title", "meta", "noscript"}
 
     def __init__(self):
         super().__init__()
         self.parts: List[str] = []
         self.current_link: Optional[Dict[str, str]] = None
+        self.skip_depth = 0
 
     def _append_break(self):
         if not self.parts or self.parts[-1] != "\n":
             self.parts.append("\n")
 
     def handle_starttag(self, tag, attrs):
+        if tag in self.SKIP_CONTENT_TAGS:
+            self.skip_depth += 1
+            return
+
+        if self.skip_depth:
+            return
+
         if tag in self.BLOCK_TAGS:
             self._append_break()
         if tag == "a":
@@ -129,6 +138,13 @@ class _HTMLToTextParser(HTMLParser):
             self.current_link = {"href": href, "text": ""}
 
     def handle_endtag(self, tag):
+        if tag in self.SKIP_CONTENT_TAGS and self.skip_depth:
+            self.skip_depth -= 1
+            return
+
+        if self.skip_depth:
+            return
+
         if tag in self.BLOCK_TAGS:
             self._append_break()
         if tag == "a" and self.current_link:
@@ -139,7 +155,7 @@ class _HTMLToTextParser(HTMLParser):
             self.current_link = None
 
     def handle_data(self, data):
-        if not data:
+        if self.skip_depth or not data:
             return
         self.parts.append(data)
         if self.current_link:
