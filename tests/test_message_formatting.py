@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from smtp_server import CustomSMTPHandler, ServerConfig
+from smtp_server import CustomSMTPHandler, ServerConfig, _HTMLToTextParser
 
 
 def test_long_html_is_sanitized_truncated_and_sent_with_html_file():
@@ -103,3 +103,30 @@ def test_html_only_message_sends_plain_text_once_and_html_attachment_without_cap
     handler.bot.send_document.assert_awaited_once()
     assert handler.bot.send_document.await_args_list[0].kwargs["document"].name == "message.html"
     assert handler.bot.send_document.await_args.kwargs["caption"] is None
+
+
+def test_html_parser_skips_style_and_script_content():
+    parser = _HTMLToTextParser()
+    parser.feed(
+        """
+        <html>
+          <head>
+            <style>.hidden{display:none}</style>
+            <title>Ignore this title</title>
+          </head>
+          <body>
+            <h1>Your authentication code</h1>
+            <p>Please use the code below</p>
+            <script>console.log('ignore this script')</script>
+          </body>
+        </html>
+        """
+    )
+
+    text = parser.get_text()
+
+    assert "hidden" not in text
+    assert "Ignore this title" not in text
+    assert "ignore this script" not in text
+    assert "Your authentication code" in text
+    assert "Please use the code below" in text
